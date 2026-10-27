@@ -1,0 +1,5 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+# Meta Model API is called over HTTPS with the stdlib (urllib) — no extra SDK
+# needed. Set META_API_KEY and META_API_URL to enable live AI summaries.

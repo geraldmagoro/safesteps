@@ -1,0 +1,9 @@
+{
+  "expo": {
+    "name": "SafeSteps Parent",
+    "slug": "safesteps-parent",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "main": "App.js"
+  }
+}

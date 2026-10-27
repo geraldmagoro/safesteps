@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+.expo/
+backend/alert.json
+backend/routes.json
+backend/children.json
+backend/ems_call.json
+.env
