@@ -13,6 +13,17 @@ Usage:
   python band-simulator/simulate.py --mode pool_play        # shallow water play
   python band-simulator/simulate.py --mode drowning --fast 10
 Modes: normal | offroute | skinoff | spike | faint | demo | pool_play | drowning
+
+Connectivity (closest connection first, works with NO internet):
+  --link-plan "direct:20,offline:30,relay:15,direct"
+    direct  = band -> phone/cellular -> backend
+    relay   = band -> nearest spaza/school relay -> backend
+    sms     = no data, band can only send an SMS alarm
+    offline = nothing reachable: band buzzes locally and BUFFERS readings,
+              then flushes them (store-and-forward) when a link returns.
+  The band evaluates the safety rules ITSELF (edge alarm), so a child in a
+  dead zone still gets a local buzzer + LED. Example:
+  python band-simulator/simulate.py --mode demo --fast 20 --link-plan "direct:15,offline:40,relay:20,direct"
 """
 
 from __future__ import annotations
@@ -184,6 +195,45 @@ class Band:
             yield r
 
 
+
+def parse_plan(plan: str):
+    """'direct:20,offline:30,direct' -> [(link, ticks|None), ...]"""
+    out = []
+    for part in [p.strip() for p in plan.split(",") if p.strip()]:
+        link, _, n = part.partition(":")
+        if link not in ("direct", "relay", "sms", "offline"):
+            raise SystemExit(f"bad link '{link}' in --link-plan")
+        out.append((link, int(n) if n else None))
+    return out or [("direct", None)]
+
+
+def link_at(plan, tick: int) -> str:
+    t = 0
+    for link, n in plan:
+        if n is None or tick < t + n:
+            return link
+        t += n
+    return plan[-1][0]
+
+
+def edge_check(r: dict, prev: dict | None):
+    """Tiny on-band rule set: runs with no internet at all."""
+    moved = 99.0
+    if prev:
+        kx = 111320.0 * math.cos(math.radians(r["gps_lat"]))
+        moved = math.hypot((r["gps_lon"] - prev["gps_lon"]) * kx,
+                           (r["gps_lat"] - prev["gps_lat"]) * 110540.0)
+    if r["water_depth_cm"] > 100 and r["water_time_sec"] > 30 and moved < 1 and r["hr"] > 130:
+        return "possible_drowning"
+    if r["skin_distance_cm"] > 2.5:
+        return "skin_off"
+    if r["hr"] > 130 and moved < 2:
+        return "hr_spike_no_movement"
+    if 0 < r["hr"] < 50 and moved < 2:
+        return "possible_faint"
+    return None
+
+
 def post(backend_url: str, payload: dict) -> str:
     body = json.dumps(payload).encode()
     req = urllib.request.Request(
@@ -199,6 +249,19 @@ def post(backend_url: str, payload: dict) -> str:
         return f"  <-- backend unreachable ({exc})"
 
 
+def post_batch(backend_url: str, batch: list) -> str:
+    url = backend_url.rstrip("/") + "/batch"
+    req = urllib.request.Request(
+        url, data=json.dumps(batch).encode(), headers={"Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            out = json.loads(resp.read().decode() or "{}")
+        return f"  <-- FLUSHED {out.get('received')} buffered readings, {out.get('alerts')} alert(s)"
+    except Exception as exc:
+        return f"  <-- flush failed ({exc})"
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="SafeSteps band simulator")
     ap.add_argument("--mode", default="normal",
@@ -209,6 +272,7 @@ def main() -> None:
     ap.add_argument("--interval", type=float, default=2.0, help="seconds per tick")
     ap.add_argument("--fast", type=float, default=1.0, help="time-lapse divisor")
     ap.add_argument("--ticks", type=int, default=0, help="max ticks (0 = run mode default)")
+    ap.add_argument("--link-plan", default="direct", help='e.g. "direct:20,offline:30,relay:15,direct"')
     args = ap.parse_args()
 
     band = Band(args.child_id)
@@ -225,16 +289,41 @@ def main() -> None:
     }[args.mode]()
 
     print(f"[band {args.child_id}] mode={args.mode} -> {args.backend} (every {args.interval}s)")
+    plan = parse_plan(args.link_plan)
+    outbox: list = []
+    prev = None
     n = 0
     for reading in gen:
-        line = json.dumps(reading)
-        print(line, flush=True)
-        print(post(args.backend, reading))
+        link = link_at(plan, n)
+        reading["ts"] = round(time.time(), 1)
+        reading["link"] = link
+        why = edge_check(reading, prev)
+        reading["edge_alarm"] = bool(why)
+        prev = reading
+        if why:
+            print(f"[band] LOCAL ALARM ({why}): buzzer + LED on - no internet needed", flush=True)
+        note = ""
+        if link in ("direct", "relay"):
+            if outbox:
+                batch = [dict(b, link="buffered") for b in outbox] + [reading]
+                note = post_batch(args.backend, batch)
+                outbox.clear()
+            else:
+                note = post(args.backend, reading)
+        elif link == "sms":
+            outbox.append(reading)
+            note = f"  <-- no data link; buffered ({len(outbox)})"
+            if why:
+                note += f"; SMS ALARM sent to parent phone: {why}"
+        else:
+            outbox.append(reading)
+            note = f"  <-- OFFLINE; buffered ({len(outbox)})"
+        print(json.dumps(reading), flush=True)
+        print(f"[{link}]{note}")
         n += 1
         if args.ticks and n >= args.ticks:
             break
         time.sleep(args.interval / args.fast)
-
 
 if __name__ == "__main__":
     main()

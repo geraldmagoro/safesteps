@@ -41,6 +41,7 @@ export default function MapScreen({ profile, onAlert }) {
           <Text>HR: {last.hr} bpm</Text>
           <Text>Skin gap: {last.skin_distance_cm} cm</Text>
           <Text>Battery: {last.battery}%</Text>
+          <Text>Link: {last.link || 'direct'}{last.link === 'buffered' ? ' (delivered late from band memory)' : ''}</Text>
           <Text>Off-route: {status.off_route_m ?? '?'} m</Text>
           <Text>Status: {status.status}</Text>
         </View>

@@ -1,7 +1,19 @@
 // Backend client with mock fallback (works even when backend is offline).
-// On a physical phone, replace localhost with your PC's LAN IP, e.g.
-// export const BACKEND_URL = 'http://192.168.1.20:8000';
-export const BACKEND_URL = 'http://localhost:8000';
+// Web: when served by the backend (tunnel URL or localhost:8000) the API shares
+// the page's origin. In Expo dev web (port 8081) it targets the same host on :8000.
+// Native (Expo Go): set EXPO_PUBLIC_BACKEND_URL to a reachable URL (e.g. the tunnel).
+import { Platform } from 'react-native';
+
+function resolveBackend() {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    const { protocol, hostname, port, origin } = window.location;
+    return port === '8081' || port === '19006' ? `${protocol}//${hostname}:8000` : origin;
+  }
+  return process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+}
+
+export const BACKEND_URL = resolveBackend();
+export const WS_URL = BACKEND_URL.replace(/^http/, 'ws') + '/ws/alerts';
 
 export const MOCK_STATUS = {
   child_id: 'child-001',
@@ -75,3 +87,13 @@ export const saveChildProfile = (childId, profile) =>
 
 // Ack an alert to stop the 5-minute EMS auto-escalation.
 export const ackAlert = (alertId) => postJSON(`/alerts/${alertId}/ack`, {});
+
+// Meta Model API usage (calls, tokens, estimated cost) for the demo header.
+export async function fetchAIStatus() {
+  try {
+    const res = await fetch(`${BACKEND_URL}/ai/status`);
+    return res.ok ? await res.json() : null;
+  } catch (e) {
+    return null;
+  }
+}

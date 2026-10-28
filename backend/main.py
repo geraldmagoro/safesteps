@@ -22,7 +22,6 @@ import asyncio
 import json
 import math
 import os
-import urllib.request
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,7 +29,13 @@ from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+
+try:
+    from . import ai
+except ImportError:  # run as a plain script
+    import ai  # type: ignore
 
 app = FastAPI(title="SafeSteps backend (MVP)")
 
@@ -60,8 +65,9 @@ HR_SPIKE = 130               # hr above this + no movement = possible distress
 STILL_M = 2.0                # consecutive pings closer than this = no movement
 EARLIEST_HOUR = int(os.getenv("SAFESTEPS_EARLIEST_HOUR", "6"))  # departures before this local hour = early departure
 
+ALERT_COOLDOWN_SECS = int(os.getenv("SAFESTEPS_ALERT_COOLDOWN_SECS", "60"))  # same alert type repeats are folded (saves AI credits)
 ACTIONS = ["notify 5 contacts", "SMS fallback", "community alert 500m"]
-MODEL_NAME = os.getenv("META_MODEL", "muse-wonder-1.0")
+MODEL_NAME = ai.MODEL_NAME
 ACK_TIMEOUT_SECS = int(os.getenv("SAFESTEPS_ACK_TIMEOUT_SECS", "300"))  # 5 min no-ack -> EMS
 
 
@@ -74,6 +80,9 @@ class Reading(BaseModel):
     battery: int = Field(ge=0, le=100)
     water_depth_cm: float = Field(default=0.0, ge=0)   # 0 = dry
     water_time_sec: float = Field(default=0.0, ge=0)   # continuous submersion
+    ts: Optional[float] = None        # band clock (epoch s) - set when buffered offline
+    link: str = "direct"              # direct | relay | buffered (how this reading reached us)
+    edge_alarm: bool = False          # band already sounded its local buzzer/LED
 
 
 class ChildState(BaseModel):
@@ -86,6 +95,9 @@ class ChildState(BaseModel):
     early_flag_dates: List[str] = Field(default_factory=list)
     last_alert: Optional[dict] = None
     water_watch: bool = False
+    history: List[dict] = Field(default_factory=list)
+    last_alert_ts: Dict[str, float] = Field(default_factory=dict)  # alert type -> epoch
+    last_alert_id: Dict[str, str] = Field(default_factory=dict)
 
 
 store: Dict[str, ChildState] = {}
@@ -129,41 +141,13 @@ def _dist_to_route_m(lat: float, lon: float) -> float:
 
 
 # ------------------------------------------------------------------ AI summary
-def ai_summarize(alert_type: str, reading: Reading, detail: str) -> str:
-    """Summarize risk via the Meta Model API when configured, else heuristic."""
-    fallback = (
-        f"[{MODEL_NAME} offline] {alert_type}: child {reading.child_id} at "
+def rule_summary(alert_type: str, reading: Reading, detail: str) -> str:
+    """Instant, offline, rule-based text. Always available; AI enriches later."""
+    return (
+        f"{alert_type.replace('_', ' ')}: child {reading.child_id} at "
         f"({reading.gps_lat:.5f}, {reading.gps_lon:.5f}), HR {reading.hr}, "
-        f"skin gap {reading.skin_distance_cm}cm. {detail} "
-        f"Set META_API_KEY + META_API_URL for a live AI summary."
+        f"skin gap {reading.skin_distance_cm}cm. {detail}"
     )
-    api_key = os.getenv("META_API_KEY")
-    api_url = os.getenv("META_API_URL")  # no default: never guess the endpoint
-    if not api_key or not api_url:
-        return fallback
-    prompt = (
-        f"You are a child-safety assistant. Alert type: {alert_type}. Detail: {detail}. "
-        f"Reading: child={reading.child_id} lat={reading.gps_lat} lon={reading.gps_lon} "
-        f"hr={reading.hr} skin_distance_cm={reading.skin_distance_cm} "
-        f"battery={reading.battery}. Summarize the risk in 2 sentences and "
-        f"suggest the single most urgent action."
-    )
-    body = json.dumps({"model": MODEL_NAME, "prompt": prompt}).encode()
-    req = urllib.request.Request(
-        api_url,
-        data=body,
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode() or "{}")
-        for key in ("summary", "text", "output", "result"):
-            if isinstance(data.get(key), str) and data[key].strip():
-                return data[key].strip()
-        return fallback + f" (model reply had no text field: {str(data)[:200]})"
-    except Exception as exc:  # offline demo must never crash on AI call
-        return fallback + f" (live call failed: {exc})"
 
 
 # ------------------------------------------------------------- websocket fans
@@ -230,6 +214,8 @@ class ChildProfile(BaseModel):
     parent_name: str = ""
     contacts: List[str] = Field(default_factory=list)
     profile_link: str = ""
+    school: str = ""
+    language: str = ""   # parent's language for the AI message, e.g. isiZulu
 
 
 # alert_id -> alert payload + ack tracking (in-memory; ems_call.json on disk)
@@ -326,7 +312,7 @@ def _check_ems_escalations(now_ts: float) -> List[dict]:
 # ------------------------------------------------------------------ endpoints
 @app.get("/health")
 def health() -> dict:
-    return {"ok": True, "model": MODEL_NAME, "children": len(store)}
+    return {"ok": True, "model": MODEL_NAME, "children": len(store), "ai": ai.configured()}
 
 
 @app.get("/route")
@@ -342,9 +328,22 @@ def route() -> dict:
 
 @app.post("/ingest")
 async def ingest(r: Reading) -> dict:
+    return await _ingest_one(r)
+
+
+@app.post("/ingest/batch")
+async def ingest_batch(readings: List[Reading]) -> dict:
+    """Store-and-forward: a band that was offline flushes its buffer here."""
+    results = [await _ingest_one(r) for r in readings]
+    alerts_raised = [x for x in results if x.get("anomaly") and not x.get("deduped")]
+    return {"received": len(results), "alerts": len(alerts_raised), "last": results[-1] if results else None}
+
+
+async def _ingest_one(r: Reading) -> dict:
     st = _state(r.child_id)
     now = datetime.now(timezone.utc)
     now_ts = now.timestamp()
+    delay_s = round(max(0.0, now_ts - r.ts), 1) if r.ts else 0.0
 
     moved_m = 0.0
     if st.last is not None:
@@ -421,6 +420,8 @@ async def ingest(r: Reading) -> dict:
 
     st.last = r
     st.last_seen = now.isoformat()
+    st.history.append({**r.model_dump(), "seen": now.isoformat()})
+    del st.history[:-30]
 
     # Opportunistic EMS sweep on every ping (watchdog covers idle periods).
     for esc in _check_ems_escalations(now_ts):
@@ -438,8 +439,16 @@ async def ingest(r: Reading) -> dict:
             resp["water_watch"] = True
         return resp
 
+    prev_ts = st.last_alert_ts.get(alert_type)
+    if prev_ts is not None and now_ts - prev_ts < ALERT_COOLDOWN_SECS:
+        return {
+            "anomaly": True, "deduped": True, "type": alert_type,
+            "id": st.last_alert_id.get(alert_type), "detail": detail,
+        }
     alert_id = uuid.uuid4().hex[:12]
-    summary = ai_summarize(alert_type, r, detail)
+    st.last_alert_ts[alert_type] = now_ts
+    st.last_alert_id[alert_type] = alert_id
+    summary = rule_summary(alert_type, r, detail)
     payload = {
         "anomaly": True,
         "id": alert_id,
@@ -447,9 +456,14 @@ async def ingest(r: Reading) -> dict:
         "location": {"gps_lat": r.gps_lat, "gps_lon": r.gps_lon},
         "detail": detail,
         "ai_summary": summary,
+        "ai": {"status": "pending" if ai.configured() else "offline"},
         "actions": ACTIONS,
         "child_id": r.child_id,
         "timestamp": now.isoformat(),
+        "event": "alert",
+        "link": r.link,
+        "delivery_delay_s": delay_s,
+        "edge_alarm": r.edge_alarm,
     }
     alerts[alert_id] = {
         **payload,
@@ -461,6 +475,8 @@ async def ingest(r: Reading) -> dict:
     st.last_alert = payload
     _write_alert_file(payload)
     await hub.broadcast(payload)
+    if ai.configured():
+        asyncio.create_task(_run_ai(alert_id))
     return payload
 
 
@@ -570,6 +586,72 @@ def get_alert(alert_id: str) -> dict:
     return rec
 
 
+async def _run_ai(alert_id: str) -> None:
+    """Background triage: never blocks or delays the alert itself."""
+    rec = alerts.get(alert_id)
+    if rec is None:
+        return
+    child_id = rec.get("child_id", "")
+    st = _state(child_id)
+    profile = _load_children().get(child_id, {})
+
+    def get_recent_readings(n: int = 10) -> list:
+        return [
+            {k: h.get(k) for k in ("gps_lat", "gps_lon", "hr", "skin_distance_cm", "link", "seen")}
+            for h in st.history[-int(n):]
+        ]
+
+    def get_child_profile() -> dict:
+        return {
+            "name": profile.get("full_name") or "unknown",
+            "age": profile.get("age") or "unknown",
+            "school": profile.get("school") or "unknown",
+            "emergency_contacts": len(profile.get("contacts", [])),
+        }
+
+    def get_nearby_help() -> dict:
+        return _primary_ems()
+
+    try:
+        result = await asyncio.to_thread(
+            ai.triage,
+            rec,
+            {
+                "get_recent_readings": get_recent_readings,
+                "get_child_profile": get_child_profile,
+                "get_nearby_help": get_nearby_help,
+            },
+            profile.get("language", ""),
+        )
+        result["status"] = "ok"
+    except Exception as exc:  # offline demo must never crash on an AI call
+        result = {"status": "error", "error": str(exc)[:300]}
+    rec["ai"] = result
+    if result.get("status") == "ok" and result.get("parent_message"):
+        rec["ai_summary"] = result["parent_message"]
+    if st.last_alert and st.last_alert.get("id") == alert_id:
+        st.last_alert = {k: rec[k] for k in st.last_alert if k in rec}
+    await hub.broadcast(
+        {"event": "alert_update", "id": alert_id, "ai": rec["ai"], "ai_summary": rec["ai_summary"]}
+    )
+
+
+@app.get("/ai/status")
+def ai_status() -> dict:
+    return ai.status()
+
+
+@app.post("/ai/selftest")
+async def ai_selftest() -> dict:
+    """Proves the Meta Model API key + endpoint work (and shows token usage)."""
+    if not ai.configured():
+        raise HTTPException(status_code=400, detail="META_API_KEY is not set")
+    try:
+        return await asyncio.to_thread(ai.selftest)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)[:300])
+
+
 @app.on_event("startup")
 async def _ems_watchdog() -> None:
     async def loop() -> None:
@@ -583,3 +665,10 @@ async def _ems_watchdog() -> None:
                 pass  # watchdog must never crash the app
 
     asyncio.create_task(loop())
+
+
+# --------------------------------------------- serve the built parent web app
+# One origin for API + app: a single tunnel URL works on any phone, any network.
+WEB_DIST = Path(__file__).parent.parent / "parent-app" / "dist"
+if WEB_DIST.exists():
+    app.mount("/", StaticFiles(directory=str(WEB_DIST), html=True), name="web")

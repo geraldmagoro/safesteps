@@ -9,6 +9,7 @@ export default function OnboardingScreen({ onDone }) {
   const [route, setRoute] = useState('Home -> Spaza (left) -> School');
   const [childName, setChildName] = useState('');
   const [photo, setPhoto] = useState(null);
+  const [language, setLanguage] = useState('');
   const [contacts, setContacts] = useState(['', '', '', '', '']);
   const [favName, setFavName] = useState('');
   const [tripMode, setTripMode] = useState(false);
@@ -43,7 +44,7 @@ export default function OnboardingScreen({ onDone }) {
     }
     setError('');
     onDone({
-      childName, school, route, contacts, photo, childId: 'child-001',
+      childName, school, route, contacts, photo, language: language.trim(), childId: 'child-001',
       favoriteRoute: favName.trim() || null,
       tripMode,
       supervisors: tripMode ? filledSupervisors : [],
@@ -61,6 +62,10 @@ export default function OnboardingScreen({ onDone }) {
       <Text style={styles.label}>Child photo</Text>
       <Button title={photo ? 'Photo attached ✓' : 'Attach photo'}
         onPress={() => setPhoto('photo-placeholder.jpg')} />
+
+      <Text style={styles.label}>Your language for alerts (optional)</Text>
+      <TextInput style={styles.input} value={language} onChangeText={setLanguage}
+        placeholder="e.g. isiZulu, Sesotho, Afrikaans" />
 
       <Text style={styles.label}>School address</Text>
       <TextInput style={styles.input} value={school} onChangeText={setSchool}

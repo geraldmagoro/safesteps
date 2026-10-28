@@ -1,10 +1,18 @@
+import { useState } from 'react';
 import { View, Text, Button, StyleSheet, ScrollView, Linking } from 'react-native';
-import { MOCK_ALERT, NEARBY_HELP } from '../api';
+import { MOCK_ALERT, NEARBY_HELP, ackAlert } from '../api';
 
 // Alert screen: map + AI summary + Call All + nearby SAPS/clinics +
 // 20 s audio/video burst player placeholders.
 export default function AlertScreen({ profile, alert, onBack }) {
   const a = alert || MOCK_ALERT;
+  const [acked, setAcked] = useState(false);
+  const ai = a.ai || {};
+  const sevColor = { critical: '#b00', high: '#d60', medium: '#a80', low: '#080' }[ai.severity] || '#555';
+
+  const ack = async () => {
+    try { await ackAlert(a.id); setAcked(true); } catch (e) { setAcked('error'); }
+  };
 
   const callAll = () => {
     // MVP: dial the first contact; v2 loops all 5 with SMS fallback.
@@ -23,7 +31,26 @@ export default function AlertScreen({ profile, alert, onBack }) {
         </Text>
       </View>
 
-      <Text style={styles.label}>AI summary</Text>
+      {a.link && a.link !== 'direct' ? (
+        <Text style={styles.hint}>Delivered via {a.link}
+          {a.delivery_delay_s ? ` (${a.delivery_delay_s}s after the band detected it)` : ''}
+          {a.edge_alarm ? ' - band buzzer already sounded' : ''}</Text>
+      ) : null}
+
+      <Text style={styles.label}>AI triage</Text>
+      {ai.status === 'pending' ? <Text style={styles.hint}>Meta Model analysing... (alert already sent)</Text> : null}
+      {ai.status === 'error' ? <Text style={styles.hint}>AI unavailable ({ai.error}). Rule-based alert stands.</Text> : null}
+      {ai.status === 'ok' ? (
+        <View>
+          <Text style={{ color: sevColor, fontWeight: '700' }}>
+            Severity: {String(ai.severity).toUpperCase()} - confidence {Math.round((ai.confidence || 0) * 100)}%
+            {ai.likely_false_alarm ? ' - may be a false alarm (still check)' : ''}
+          </Text>
+          {(ai.reasons || []).map((r, i) => <Text key={i}>- {r}</Text>)}
+          {ai.parent_message_local ? <Text style={styles.summary}>{ai.parent_message_local}</Text> : null}
+          <Text style={styles.hint}>Model: {ai.model}</Text>
+        </View>
+      ) : null}
       <Text style={styles.summary}>{a.ai_summary}</Text>
 
       <Text style={styles.label}>Actions</Text>
@@ -31,6 +58,11 @@ export default function AlertScreen({ profile, alert, onBack }) {
         <Text key={x}>• {x}</Text>
       ))}
 
+      <View style={styles.gap} />
+      {a.id ? (
+        <Button title={acked === true ? 'Acknowledged - EMS escalation stopped' : acked === 'error' ? 'Ack failed - retry' : 'I SEE THIS (acknowledge)'}
+          color="#070" onPress={ack} />
+      ) : null}
       <View style={styles.gap} />
       <Button title="CALL ALL (5 contacts)" color="#b00" onPress={callAll} />
 
