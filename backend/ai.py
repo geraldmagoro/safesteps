@@ -109,6 +109,7 @@ def chat(messages: List[dict], tools: Optional[List[dict]] = None, timeout: floa
             usage["last_error"] = str(exc)
             raise
     usage["calls"] += 1  # type: ignore[operator]
+    usage["last_error"] = None  # latest call succeeded
     usage["last_latency_s"] = round(time.time() - t0, 2)
     u = data.get("usage") or {}
     usage["prompt_tokens"] += int(u.get("prompt_tokens", 0))  # type: ignore[operator]

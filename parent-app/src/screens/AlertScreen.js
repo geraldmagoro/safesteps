@@ -1,19 +1,46 @@
 import { useState } from 'react';
-import { View, Text, Button, StyleSheet, ScrollView, Linking } from 'react-native';
-import { MOCK_ALERT, NEARBY_HELP, ackAlert } from '../api';
+import { View, ScrollView, Linking } from 'react-native';
+import { MOCK_ALERT, NEARBY_HELP, ackAlert, DEFAULT_ROUTE } from '../api';
+import { C, LINK_COLOR } from '../theme';
+import { T, Btn, Card, Chip } from '../ui';
+import RouteMap from '../RouteMap';
 
-// Alert screen: map + AI summary + Call All + nearby SAPS/clinics +
-// 20 s audio/video burst player placeholders.
+export const SEV_COLOR = { critical: C.red, high: C.orange, medium: C.amber, low: C.green };
+
+// Compact AI triage block, shared with the Demo screen.
+export function Triage({ a }) {
+  const ai = a.ai || {};
+  return (
+    <View style={{ gap: 4 }}>
+      {ai.status === 'pending' && <T style={{ color: C.blue }}>Meta Model analysing… the alert has already been sent.</T>}
+      {ai.status === 'error' && <T style={{ color: C.amber }}>AI unavailable ({ai.error}). The rule-based alert stands.</T>}
+      {ai.status === 'offline' && <T style={{ color: C.mute }}>AI not configured. Rule-based alert only.</T>}
+      {ai.status === 'ok' && (
+        <View style={{ gap: 3 }}>
+          <T style={{ color: SEV_COLOR[ai.severity] || C.text, fontWeight: '700' }}>
+            Severity {String(ai.severity).toUpperCase()} · confidence {Math.round((ai.confidence || 0) * 100)}%
+            {ai.likely_false_alarm ? ' · may be a false alarm (still check)' : ''}
+          </T>
+          {(ai.reasons || []).map((r, i) => <T key={i} style={{ color: C.mute }}>· {r}</T>)}
+          <T style={{ fontStyle: 'italic', marginTop: 4 }}>{ai.parent_message || a.ai_summary}</T>
+          {ai.parent_message_local ? <T style={{ fontStyle: 'italic', color: C.orange }}>{ai.parent_message_local}</T> : null}
+          <T mono style={{ color: C.mute, fontSize: 11 }}>model: {ai.model}</T>
+        </View>
+      )}
+      {!ai.status && <T style={{ fontStyle: 'italic' }}>{a.ai_summary}</T>}
+    </View>
+  );
+}
+
+// Alert screen: map + AI triage + acknowledge + Call All + nearby help.
 export default function AlertScreen({ profile, alert, onBack }) {
   const a = alert || MOCK_ALERT;
   const [acked, setAcked] = useState(false);
-  const ai = a.ai || {};
-  const sevColor = { critical: '#b00', high: '#d60', medium: '#a80', low: '#080' }[ai.severity] || '#555';
+  const loc = [a.location.gps_lat, a.location.gps_lon];
 
   const ack = async () => {
     try { await ackAlert(a.id); setAcked(true); } catch (e) { setAcked('error'); }
   };
-
   const callAll = () => {
     // MVP: dial the first contact; v2 loops all 5 with SMS fallback.
     const first = profile.contacts[0].replace(/\s/g, '');
@@ -21,83 +48,57 @@ export default function AlertScreen({ profile, alert, onBack }) {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.wrap}>
-      <Text style={styles.title}>⚠ {a.type.replace(/_/g, ' ').toUpperCase()}</Text>
-      <Text>{a.detail}</Text>
-
-      <View style={styles.mapBox}>
-        <Text style={styles.mapText}>
-          {a.location.gps_lat.toFixed(5)}, {a.location.gps_lon.toFixed(5)}
-        </Text>
+    <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
+      <View>
+        <T head style={{ fontSize: 28, color: C.red }}>⚠ {a.type.replace(/_/g, ' ').toUpperCase()}</T>
+        <T style={{ color: C.mute, marginTop: 2 }}>{a.detail}</T>
       </View>
 
-      {a.link && a.link !== 'direct' ? (
-        <Text style={styles.hint}>Delivered via {a.link}
-          {a.delivery_delay_s ? ` (${a.delivery_delay_s}s after the band detected it)` : ''}
-          {a.edge_alarm ? ' - band buzzer already sounded' : ''}</Text>
-      ) : null}
+      <RouteMap route={DEFAULT_ROUTE} last={{ gps_lat: loc[0], gps_lon: loc[1] }} alertLoc={loc} offRouteM={999} />
+      <T mono style={{ color: C.mute, fontSize: 12 }}>{loc[0].toFixed(5)}, {loc[1].toFixed(5)}</T>
 
-      <Text style={styles.label}>AI triage</Text>
-      {ai.status === 'pending' ? <Text style={styles.hint}>Meta Model analysing... (alert already sent)</Text> : null}
-      {ai.status === 'error' ? <Text style={styles.hint}>AI unavailable ({ai.error}). Rule-based alert stands.</Text> : null}
-      {ai.status === 'ok' ? (
-        <View>
-          <Text style={{ color: sevColor, fontWeight: '700' }}>
-            Severity: {String(ai.severity).toUpperCase()} - confidence {Math.round((ai.confidence || 0) * 100)}%
-            {ai.likely_false_alarm ? ' - may be a false alarm (still check)' : ''}
-          </Text>
-          {(ai.reasons || []).map((r, i) => <Text key={i}>- {r}</Text>)}
-          {ai.parent_message_local ? <Text style={styles.summary}>{ai.parent_message_local}</Text> : null}
-          <Text style={styles.hint}>Model: {ai.model}</Text>
+      {a.link && a.link !== 'direct' && (
+        <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Chip label={`VIA ${a.link.toUpperCase()}`} color={LINK_COLOR[a.link] || C.mute} />
+          {a.delivery_delay_s ? <T style={{ color: C.mute, fontSize: 12 }}>{a.delivery_delay_s}s after the band detected it</T> : null}
+          {a.edge_alarm ? <T style={{ color: C.orange, fontSize: 12 }}>band buzzer already sounded</T> : null}
         </View>
-      ) : null}
-      <Text style={styles.summary}>{a.ai_summary}</Text>
+      )}
 
-      <Text style={styles.label}>Actions</Text>
-      {a.actions.map((x) => (
-        <Text key={x}>• {x}</Text>
-      ))}
+      <Card>
+        <T style={{ color: C.mute, fontSize: 11, letterSpacing: 0.8, marginBottom: 6 }}>AI TRIAGE</T>
+        <Triage a={a} />
+      </Card>
 
-      <View style={styles.gap} />
-      {a.id ? (
-        <Button title={acked === true ? 'Acknowledged - EMS escalation stopped' : acked === 'error' ? 'Ack failed - retry' : 'I SEE THIS (acknowledge)'}
-          color="#070" onPress={ack} />
-      ) : null}
-      <View style={styles.gap} />
-      <Button title="CALL ALL (5 contacts)" color="#b00" onPress={callAll} />
+      <Card>
+        <T style={{ color: C.mute, fontSize: 11, letterSpacing: 0.8, marginBottom: 6 }}>ACTIONS</T>
+        {a.actions.map((x) => <T key={x}>• {x}</T>)}
+      </Card>
 
-      <Text style={styles.label}>20 s bursts</Text>
-      <View style={styles.row}>
-        <Button title="▶ Audio burst" onPress={() => {}} />
-        <Button title="▶ Video burst" onPress={() => {}} />
+      <View style={{ gap: 8 }}>
+        {a.id ? (
+          <Btn kind="ok" onPress={ack}
+            title={acked === true ? 'Acknowledged · EMS escalation stopped' : acked === 'error' ? 'Ack failed · retry' : 'I SEE THIS (acknowledge)'} />
+        ) : null}
+        <Btn kind="danger" title="CALL FIRST CONTACT" onPress={callAll} />
       </View>
-      <Text style={styles.hint}>(Placeholders in MVP — clips attach here.)</Text>
 
-      <Text style={styles.label}>Nearby help</Text>
-      {NEARBY_HELP.map((h) => (
-        <View key={h.name} style={styles.helpRow}>
-          <Text>{h.kind}: {h.name} ({h.dist_m}m)</Text>
-          <Button title="Call" onPress={() => Linking.openURL(`tel:${h.phone}`)} />
-        </View>
-      ))}
+      <Card>
+        <T style={{ color: C.mute, fontSize: 11, letterSpacing: 0.8, marginBottom: 6 }}>20 S AUDIO / VIDEO BURSTS</T>
+        <T style={{ color: C.mute, fontSize: 12 }}>Roadmap: band clips attach here. Not built in this MVP.</T>
+      </Card>
 
-      <View style={styles.gap} />
-      <Button title="Back to live map" onPress={onBack} />
+      <Card style={{ gap: 8 }}>
+        <T style={{ color: C.mute, fontSize: 11, letterSpacing: 0.8 }}>NEARBY HELP · SAMPLE LIST FOR THE DEMO</T>
+        {NEARBY_HELP.map((h) => (
+          <View key={h.name} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+            <T>{h.kind}: {h.name} ({h.dist_m} m)</T>
+            <Btn small kind="ghost" title="Call" onPress={() => Linking.openURL(`tel:${h.phone}`)} />
+          </View>
+        ))}
+      </Card>
+
+      <Btn kind="ghost" title="Back to live map" onPress={onBack} />
     </ScrollView>
   );
 }
-
-const styles = StyleSheet.create({
-  wrap: { padding: 20, gap: 6 },
-  title: { fontSize: 22, fontWeight: 'bold', color: '#b00' },
-  mapBox: { borderWidth: 1, borderColor: '#333', borderRadius: 8, padding: 20,
-    alignItems: 'center', marginVertical: 8, backgroundColor: '#fde' },
-  mapText: { fontSize: 18, fontWeight: 'bold' },
-  label: { fontWeight: '700', marginTop: 10 },
-  summary: { fontStyle: 'italic' },
-  row: { flexDirection: 'row', gap: 10, marginTop: 4 },
-  hint: { color: '#666', fontSize: 12 },
-  helpRow: { flexDirection: 'row', justifyContent: 'space-between',
-    alignItems: 'center', marginTop: 4 },
-  gap: { height: 10 },
-});

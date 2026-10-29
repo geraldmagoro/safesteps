@@ -97,3 +97,21 @@ export async function fetchAIStatus() {
     return null;
   }
 }
+
+// Planned route + rule thresholds (falls back to the built-in demo route).
+export const DEFAULT_ROUTE = {
+  home: [-26.2485, 27.854], spaza: [-26.247, 27.8525], school: [-26.2455, 27.8535],
+  off_route_dist_m: 15, off_route_secs: 300,
+};
+export async function fetchRoute() {
+  try {
+    return await getJSON('/route');
+  } catch (e) {
+    return DEFAULT_ROUTE;
+  }
+}
+
+// One-click demo (runs inside the backend; no terminal needed).
+export const demoScenarios = () => getJSON('/demo/scenarios');
+export const demoStatus = () => getJSON('/demo/status');
+export const demoPlay = (scenario) => postJSON('/demo/play', { scenario });

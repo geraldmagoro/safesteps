@@ -22,6 +22,7 @@ import asyncio
 import json
 import math
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,7 +59,7 @@ SPAZA = (-26.2470, 27.8525)
 SCHOOL = (-26.2455, 27.8535)
 ROUTE = [HOME, SPAZA, SCHOOL]
 
-OFF_ROUTE_DIST_M = 2.0       # more than 2 m from the route polyline
+OFF_ROUTE_DIST_M = float(os.getenv("SAFESTEPS_OFF_ROUTE_M", "15"))  # metres from route polyline (consumer GPS error is several metres)
 OFF_ROUTE_SECS = 5 * 60      # ... for more than 5 minutes
 SKIN_OFF_CM = 2.5            # skin_distance_cm above this = band off skin
 HR_SPIKE = 130               # hr above this + no movement = possible distress
@@ -172,6 +173,15 @@ hub = _AlertsHub()
 
 def _write_alert_file(payload: dict) -> None:
     record = dict(payload)
+    loc = dict(record.get("location") or {})
+    for k in ("gps_lat", "gps_lon"):
+        if k in loc:
+            loc[k] = round(loc[k], 3)  # ~100 m: logs never hold the exact position
+    record["location"] = loc
+    record["ai_summary"] = re.sub(
+        r"-?\d+\.\d{5}", lambda m: f"{float(m.group(0)):.3f}", str(record.get("ai_summary", ""))
+    )
+    record["privacy"] = "coordinates rounded to ~100 m in saved logs; live alert to parent is exact"
     record["bursts"] = {
         # 20 s burst placeholders: real band uploads clips here.
         "audio_20s": "placeholder: 20s audio burst not captured in MVP",
@@ -495,6 +505,7 @@ def child_status(child_id: str) -> dict:
         "off_route_m": round(st.off_route_m, 1),
         "water_watch": st.water_watch,
         "last_alert": st.last_alert,
+        "trail": [[h["gps_lat"], h["gps_lon"]] for h in st.history[-25:]],
     }
 
 
@@ -667,8 +678,26 @@ async def _ems_watchdog() -> None:
     asyncio.create_task(loop())
 
 
+try:
+    from . import demo as _demo
+except ImportError:
+    import demo as _demo  # type: ignore
+_demo.install(app, _ingest_one, _state, hub, Reading)
+
+
 # --------------------------------------------- serve the built parent web app
 # One origin for API + app: a single tunnel URL works on any phone, any network.
 WEB_DIST = Path(__file__).parent.parent / "parent-app" / "dist"
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    from fastapi.responses import FileResponse
+
+    f = Path(__file__).parent.parent / "parent-app" / "assets" / "favicon.png"
+    if not f.exists():
+        raise HTTPException(status_code=404)
+    return FileResponse(str(f), media_type="image/png")
+
 if WEB_DIST.exists():
     app.mount("/", StaticFiles(directory=str(WEB_DIST), html=True), name="web")

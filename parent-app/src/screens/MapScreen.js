@@ -1,12 +1,24 @@
 import { useEffect, useState } from 'react';
-import { View, Text, Button, StyleSheet } from 'react-native';
-import { fetchStatus } from '../api';
+import { ScrollView, View } from 'react-native';
+import { fetchStatus, fetchRoute, DEFAULT_ROUTE } from '../api';
+import { C, LINK_COLOR } from '../theme';
+import { T, Btn, Card, Chip } from '../ui';
+import RouteMap from '../RouteMap';
 
-// Live map screen. MVP renders coordinates + vitals (no map SDK needed);
-// swap the placeholder box for react-native-maps MapView in v2.
-export default function MapScreen({ profile, onAlert }) {
+function Stat({ label, value, color }) {
+  return (
+    <Card style={{ flexGrow: 1, flexBasis: 140, padding: 12 }}>
+      <T style={{ color: C.mute, fontSize: 11, letterSpacing: 0.8 }}>{label.toUpperCase()}</T>
+      <T head style={{ fontSize: 24, color: color || C.text, marginTop: 2 }}>{value}</T>
+    </Card>
+  );
+}
+
+// Live screen: offline route map + vitals. Polls the backend every 2 s.
+export default function MapScreen({ profile, onAlert, hasAlert }) {
   const [status, setStatus] = useState(null);
   const [live, setLive] = useState(false);
+  const [route, setRoute] = useState(DEFAULT_ROUTE);
 
   const refresh = async () => {
     const { data, live } = await fetchStatus(profile.childId);
@@ -15,53 +27,43 @@ export default function MapScreen({ profile, onAlert }) {
   };
 
   useEffect(() => {
+    fetchRoute().then(setRoute);
     refresh();
-    const t = setInterval(refresh, 5000);
+    const t = setInterval(refresh, 2000);
     return () => clearInterval(t);
   }, []);
 
   const last = status?.last;
+  const link = last?.link || 'direct';
 
   return (
-    <View style={styles.wrap}>
-      <Text style={styles.title}>Live: {profile.childName}</Text>
-      <Text style={live ? styles.live : styles.mock}>
-        {live ? '● LIVE from backend' : '○ MOCK data (backend offline)'}
-      </Text>
-
-      <View style={styles.mapBox}>
-        <Text style={styles.mapText}>
-          {last ? `${last.gps_lat.toFixed(5)}, ${last.gps_lon.toFixed(5)}` : 'waiting for GPS…'}
-        </Text>
-        <Text>Home → Spaza (left) → School</Text>
+    <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+        <T head style={{ fontSize: 26 }}>{profile.childName}</T>
+        <Chip label={live ? 'LIVE FROM BACKEND' : 'MOCK DATA · BACKEND OFFLINE'} color={live ? C.green : C.amber} />
       </View>
 
+      <RouteMap route={route} last={last} trail={status?.trail || []} offRouteM={status?.off_route_m || 0} />
+      {!last && <T style={{ color: C.mute }}>Waiting for the band. Press “Play demo” in the Demo tab, or start the simulator.</T>}
+
       {last && (
-        <View style={styles.vitals}>
-          <Text>HR: {last.hr} bpm</Text>
-          <Text>Skin gap: {last.skin_distance_cm} cm</Text>
-          <Text>Battery: {last.battery}%</Text>
-          <Text>Link: {last.link || 'direct'}{last.link === 'buffered' ? ' (delivered late from band memory)' : ''}</Text>
-          <Text>Off-route: {status.off_route_m ?? '?'} m</Text>
-          <Text>Status: {status.status}</Text>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+          <Stat label="Heart rate" value={`${last.hr} bpm`} color={last.hr > 130 ? C.red : C.text} />
+          <Stat label="Skin gap" value={`${last.skin_distance_cm} cm`} color={last.skin_distance_cm > 2.5 ? C.red : C.text} />
+          <Stat label="Battery" value={`${last.battery}%`} />
+          <Stat label="Link" value={link} color={LINK_COLOR[link] || C.text} />
+          <Stat label="Off route" value={`${status.off_route_m ?? '?'} m`} color={(status.off_route_m || 0) > route.off_route_dist_m ? C.red : C.text} />
+          <Stat label="Status" value={status.status} color={status.status === 'alert' ? C.red : C.green} />
         </View>
       )}
+      {last && link === 'buffered' && (
+        <T style={{ color: C.orange, fontSize: 12 }}>Delivered late from the band’s memory after it was offline.</T>
+      )}
 
-      <Button title="Refresh" onPress={refresh} />
-      <View style={styles.gap} />
-      <Button title="Open latest alert (demo)" color="#b00" onPress={onAlert} />
-    </View>
+      <View style={{ gap: 8 }}>
+        <Btn title="Refresh" kind="ghost" onPress={refresh} />
+        <Btn title={hasAlert ? 'Open latest alert' : 'Open sample alert (demo)'} kind="danger" onPress={onAlert} />
+      </View>
+    </ScrollView>
   );
 }
-
-const styles = StyleSheet.create({
-  wrap: { padding: 20, gap: 8, flex: 1 },
-  title: { fontSize: 22, fontWeight: 'bold' },
-  live: { color: 'green', fontWeight: '600' },
-  mock: { color: '#a60', fontWeight: '600' },
-  mapBox: { borderWidth: 1, borderColor: '#333', borderRadius: 8, padding: 24,
-    alignItems: 'center', marginVertical: 10, backgroundColor: '#eef4ee' },
-  mapText: { fontSize: 18, fontWeight: 'bold' },
-  vitals: { gap: 2, marginBottom: 10 },
-  gap: { height: 8 },
-});

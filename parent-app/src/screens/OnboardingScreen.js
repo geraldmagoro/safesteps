@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import { View, Text, TextInput, Button, StyleSheet, ScrollView, Switch } from 'react-native';
+import { View, StyleSheet, ScrollView, Switch } from 'react-native';
+import { C } from '../theme';
+import { T, Btn, Input } from '../ui';
 
 // Onboarding: school address, route notes, 5 MANDATORY emergency contacts,
 // child photo placeholder, favorite-route saving, Trip Mode with supervisor
@@ -53,67 +55,67 @@ export default function OnboardingScreen({ onDone }) {
 
   return (
     <ScrollView contentContainerStyle={styles.wrap}>
-      <Text style={styles.title}>SafeSteps setup</Text>
+      <T head style={styles.title}>SafeSteps setup</T>
 
-      <Text style={styles.label}>Child name</Text>
-      <TextInput style={styles.input} value={childName} onChangeText={setChildName}
+      <T style={styles.label}>Child name</T>
+      <Input value={childName} onChangeText={setChildName}
         placeholder="e.g. Naledi" />
 
-      <Text style={styles.label}>Child photo</Text>
-      <Button title={photo ? 'Photo attached ✓' : 'Attach photo'}
+      <T style={styles.label}>Child photo</T>
+      <Btn title={photo ? 'Photo attached ✓' : 'Attach photo'}
         onPress={() => setPhoto('photo-placeholder.jpg')} />
 
-      <Text style={styles.label}>Your language for alerts (optional)</Text>
-      <TextInput style={styles.input} value={language} onChangeText={setLanguage}
+      <T style={styles.label}>Your language for alerts (optional)</T>
+      <Input value={language} onChangeText={setLanguage}
         placeholder="e.g. isiZulu, Sesotho, Afrikaans" />
 
-      <Text style={styles.label}>School address</Text>
-      <TextInput style={styles.input} value={school} onChangeText={setSchool}
+      <T style={styles.label}>School address</T>
+      <Input value={school} onChangeText={setSchool}
         placeholder="e.g. 12 Mooki St, Orlando East" />
 
-      <Text style={styles.label}>Route</Text>
-      <TextInput style={styles.input} value={route} onChangeText={setRoute} />
+      <T style={styles.label}>Route</T>
+      <Input value={route} onChangeText={setRoute} />
 
-      <Text style={styles.label}>Save as Favorite</Text>
-      <TextInput style={styles.input} value={favName} onChangeText={setFavName}
+      <T style={styles.label}>Save as Favorite</T>
+      <Input value={favName} onChangeText={setFavName}
         placeholder="e.g. School run (optional)" />
 
       <View style={styles.row}>
-        <Text style={styles.label}>Trip Mode</Text>
-        <Switch value={tripMode} onValueChange={setTripMode} />
+        <T style={styles.label}>Trip Mode</T>
+        <Switch value={tripMode} onValueChange={setTripMode} trackColor={{ true: C.orange, false: C.line }} thumbColor={C.text} />
       </View>
       {tripMode ? (
         <View>
-          <Text style={styles.hint}>Supervisor contacts (min 2) — notified first on Trip Mode alerts.</Text>
+          <T style={styles.hint}>Supervisor contacts (min 2) — notified first on Trip Mode alerts.</T>
           {supervisors.map((s, i) => (
-            <TextInput key={i} style={styles.input} value={s}
+            <Input key={i} value={s}
               onChangeText={(v) => setSupervisor(i, v)}
               placeholder={`Supervisor ${i + 1} phone`} keyboardType="phone-pad" />
           ))}
-          <Button title="+ Add supervisor"
+          <Btn title="+ Add supervisor"
             onPress={() => setSupervisors([...supervisors, ''])} />
         </View>
       ) : null}
 
-      <Text style={styles.label}>Emergency contacts (5 required)</Text>
+      <T style={styles.label}>Emergency contacts (5 required)</T>
       {contacts.map((c, i) => (
-        <TextInput key={i} style={styles.input} value={c}
+        <Input key={i} value={c}
           onChangeText={(v) => setContact(i, v)}
           placeholder={`Contact ${i + 1} phone`} keyboardType="phone-pad" />
       ))}
 
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-      <Button title="Start protecting" onPress={submit} />
+      {error ? <T style={styles.error}>{error}</T> : null}
+      <Btn title="Start protecting" onPress={submit} />
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   wrap: { padding: 20, gap: 6 },
-  title: { fontSize: 24, fontWeight: 'bold', marginBottom: 10 },
-  label: { fontWeight: '600', marginTop: 8 },
+  title: { fontSize: 26, marginBottom: 10 },
+  label: { fontWeight: '600', marginTop: 8, color: C.text },
   input: { borderWidth: 1, borderColor: '#999', borderRadius: 6, padding: 8, marginTop: 2 },
-  error: { color: 'red', marginVertical: 8 },
+  error: { color: C.red, marginVertical: 8 },
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 },
-  hint: { color: '#666', fontSize: 12, marginTop: 4 },
+  hint: { color: C.mute, fontSize: 12, marginTop: 4 },
 });
