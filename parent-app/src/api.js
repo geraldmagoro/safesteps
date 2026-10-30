@@ -15,6 +15,25 @@ function resolveBackend() {
 export const BACKEND_URL = resolveBackend();
 export const WS_URL = BACKEND_URL.replace(/^http/, 'ws') + '/ws/alerts';
 
+// Shared access PIN (demo-grade gate; real accounts are on the roadmap).
+let PIN = '';
+try { PIN = (typeof window !== 'undefined' && window.localStorage && window.localStorage.getItem('safesteps_pin')) || ''; } catch (e) { /* no storage */ }
+export const getPin = () => PIN;
+export function setPin(p) {
+  PIN = p;
+  try { window.localStorage.setItem('safesteps_pin', p); } catch (e) { /* no storage */ }
+}
+const authHeaders = (extra = {}) => (PIN ? { 'x-pin': PIN, ...extra } : extra);
+export const wsUrl = () => WS_URL + (PIN ? `?pin=${encodeURIComponent(PIN)}` : '');
+export async function authCheck() {
+  try {
+    const res = await fetch(`${BACKEND_URL}/auth/check`, { headers: authHeaders() });
+    return await res.json();
+  } catch (e) {
+    return { pin_required: false, ok: true, offline: true };
+  }
+}
+
 export const MOCK_STATUS = {
   child_id: 'child-001',
   status: 'ok',
@@ -51,7 +70,7 @@ export const NEARBY_HELP = [
 
 export async function fetchStatus(childId) {
   try {
-    const res = await fetch(`${BACKEND_URL}/children/${childId}/status`);
+    const res = await fetch(`${BACKEND_URL}/children/${childId}/status`, { headers: authHeaders() });
     if (!res.ok) throw new Error('bad status ' + res.status);
     return { data: await res.json(), live: true };
   } catch (e) {
@@ -62,7 +81,7 @@ export async function fetchStatus(childId) {
 async function postJSON(path, body) {
   const res = await fetch(`${BACKEND_URL}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`POST ${path} -> ${res.status}`);
@@ -70,7 +89,7 @@ async function postJSON(path, body) {
 }
 
 async function getJSON(path) {
-  const res = await fetch(`${BACKEND_URL}${path}`);
+  const res = await fetch(`${BACKEND_URL}${path}`, { headers: authHeaders() });
   if (!res.ok) throw new Error(`GET ${path} -> ${res.status}`);
   return res.json();
 }
@@ -91,7 +110,7 @@ export const ackAlert = (alertId) => postJSON(`/alerts/${alertId}/ack`, {});
 // Meta Model API usage (calls, tokens, estimated cost) for the demo header.
 export async function fetchAIStatus() {
   try {
-    const res = await fetch(`${BACKEND_URL}/ai/status`);
+    const res = await fetch(`${BACKEND_URL}/ai/status`, { headers: authHeaders() });
     return res.ok ? await res.json() : null;
   } catch (e) {
     return null;
@@ -115,3 +134,10 @@ export async function fetchRoute() {
 export const demoScenarios = () => getJSON('/demo/scenarios');
 export const demoStatus = () => getJSON('/demo/status');
 export const demoPlay = (scenario) => postJSON('/demo/play', { scenario });
+
+// Personal baseline (learn what is normal for this child; parent approves changes).
+export const baselineGet = (id) => getJSON(`/baseline/${id}`);
+export const baselineSeed = (id) => postJSON(`/baseline/${id}/seed`, {});
+export const baselineAnalyze = (id) => postJSON(`/baseline/${id}/analyze`, {});
+export const baselineApprove = (id) => postJSON(`/baseline/${id}/approve`, {});
+export const baselineReset = (id) => postJSON(`/baseline/${id}/reset`, {});

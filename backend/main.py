@@ -23,20 +23,23 @@ import json
 import math
 import os
 import re
+import secrets
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Request, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 try:
-    from . import ai
+    from . import ai, baseline
 except ImportError:  # run as a plain script
     import ai  # type: ignore
+    import baseline  # type: ignore
 
 app = FastAPI(title="SafeSteps backend (MVP)")
 
@@ -46,6 +49,33 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ----------------------------------------------------------- access PIN (MVP)
+# One shared PIN protects every data endpoint when SAFESTEPS_PIN is set.
+# This is a demo-grade gate, not user accounts: real accounts are on the roadmap.
+API_SEGMENTS = {"ingest", "children", "alerts", "routes", "route", "schedule", "ai", "demo", "ws", "baseline"}
+
+
+def _pin() -> str:
+    return os.getenv("SAFESTEPS_PIN", "")
+
+
+def _pin_ok(supplied: str) -> bool:
+    pin = _pin()
+    return (not pin) or secrets.compare_digest(supplied or "", pin)
+
+
+@app.middleware("http")
+async def pin_guard(request, call_next):
+    parts = request.url.path.split("/")
+    seg = parts[1] if len(parts) > 1 else ""
+    if _pin() and seg in API_SEGMENTS and request.method != "OPTIONS":
+        supplied = request.headers.get("x-pin", "") or request.query_params.get("pin", "")
+        if not _pin_ok(supplied):
+            return JSONResponse({"detail": "PIN required"}, status_code=401)
+    return await call_next(request)
+
 
 ALERT_FILE = Path(__file__).parent / "alert.json"
 ROUTES_FILE = Path(__file__).parent / "routes.json"
@@ -57,7 +87,8 @@ EMS_FILE = Path(__file__).parent / "ems_call.json"
 HOME = (-26.2485, 27.8540)
 SPAZA = (-26.2470, 27.8525)
 SCHOOL = (-26.2455, 27.8535)
-ROUTE = [HOME, SPAZA, SCHOOL]
+ROUTE = [HOME, SPAZA, SCHOOL]   # mutable: POST /route/rebase re-fits it to where the demo happens
+ROUTE_DEFAULT = list(ROUTE)
 
 OFF_ROUTE_DIST_M = float(os.getenv("SAFESTEPS_OFF_ROUTE_M", "15"))  # metres from route polyline (consumer GPS error is several metres)
 OFF_ROUTE_SECS = 5 * 60      # ... for more than 5 minutes
@@ -99,6 +130,7 @@ class ChildState(BaseModel):
     history: List[dict] = Field(default_factory=list)
     last_alert_ts: Dict[str, float] = Field(default_factory=dict)  # alert type -> epoch
     last_alert_id: Dict[str, str] = Field(default_factory=dict)
+    hr_spike_override: Optional[int] = None   # parent-approved personal threshold (heart rate while still only)
 
 
 store: Dict[str, ChildState] = {}
@@ -328,12 +360,52 @@ def health() -> dict:
 @app.get("/route")
 def route() -> dict:
     return {
-        "home": HOME,
-        "spaza": SPAZA,
-        "school": SCHOOL,
+        "home": list(ROUTE[0]),
+        "spaza": list(ROUTE[1]),
+        "school": list(ROUTE[2]),
         "off_route_dist_m": OFF_ROUTE_DIST_M,
         "off_route_secs": OFF_ROUTE_SECS,
     }
+
+
+@app.get("/auth/check")
+def auth_check(request: Request) -> dict:
+    supplied = request.headers.get("x-pin", "") or request.query_params.get("pin", "")
+    return {"pin_required": bool(_pin()), "ok": _pin_ok(supplied)}
+
+
+class RouteRebase(BaseModel):
+    home: List[float]
+    school: List[float]
+
+
+@app.post("/route/rebase")
+def route_rebase(body: RouteRebase) -> dict:
+    """Fit the expected route to where the demo happens (phone-as-band walks).
+
+    Spaza stop = midpoint. Home and school must be 15 m to 5 km apart.
+    """
+    if len(body.home) != 2 or len(body.school) != 2:
+        raise HTTPException(status_code=400, detail="home and school must be [lat, lon]")
+    d = _haversine_m(body.home[0], body.home[1], body.school[0], body.school[1])
+    if d < 15 or d > 5000:
+        raise HTTPException(status_code=400, detail=f"home and school are {d:.0f} m apart; need 15 m to 5 km")
+    home, school = tuple(body.home), tuple(body.school)
+    mid = ((home[0] + school[0]) / 2, (home[1] + school[1]) / 2)
+    ROUTE[:] = [home, mid, school]
+    for st in store.values():
+        st.off_route_since = None
+        st.off_route_hits = 0
+    return route()
+
+
+@app.post("/route/reset")
+def route_reset() -> dict:
+    ROUTE[:] = ROUTE_DEFAULT
+    for st in store.values():
+        st.off_route_since = None
+        st.off_route_hits = 0
+    return route()
 
 
 @app.post("/ingest")
@@ -396,7 +468,7 @@ async def _ingest_one(r: Reading) -> dict:
             "off_route",
             f"{off_m:.0f}m off route for {off_secs / 60:.1f}min.",
         )
-    elif r.hr > HR_SPIKE and moved_m < STILL_M and st.last is not None:
+    elif r.hr > (st.hr_spike_override or HR_SPIKE) and moved_m < STILL_M and st.last is not None:
         alert_type, detail = (
             "hr_spike_no_movement",
             f"HR {r.hr} with no movement ({moved_m:.1f}m since last ping).",
@@ -511,6 +583,9 @@ def child_status(child_id: str) -> dict:
 
 @app.websocket("/ws/alerts")
 async def ws_alerts(ws: WebSocket) -> None:
+    if not _pin_ok(ws.query_params.get("pin", "")):
+        await ws.close(code=4401)
+        return
     await ws.accept()
     hub.clients.append(ws)
     try:
@@ -623,6 +698,9 @@ async def _run_ai(alert_id: str) -> None:
     def get_nearby_help() -> dict:
         return _primary_ems()
 
+    def get_baseline() -> dict:
+        return baseline.summary_for(child_id)
+
     try:
         result = await asyncio.to_thread(
             ai.triage,
@@ -631,6 +709,7 @@ async def _run_ai(alert_id: str) -> None:
                 "get_recent_readings": get_recent_readings,
                 "get_child_profile": get_child_profile,
                 "get_nearby_help": get_nearby_help,
+                "get_baseline": get_baseline,
             },
             profile.get("language", ""),
         )
@@ -682,12 +761,18 @@ try:
     from . import demo as _demo
 except ImportError:
     import demo as _demo  # type: ignore
-_demo.install(app, _ingest_one, _state, hub, Reading)
+_demo.install(app, _ingest_one, _state, hub, Reading, lambda: ROUTE)
+baseline.install(app, _state)
 
 
 # --------------------------------------------- serve the built parent web app
 # One origin for API + app: a single tunnel URL works on any phone, any network.
 WEB_DIST = Path(__file__).parent.parent / "parent-app" / "dist"
+
+
+@app.get("/band", include_in_schema=False)
+def band_page():
+    return FileResponse(str(Path(__file__).parent / "band.html"), media_type="text/html")
 
 
 @app.get("/favicon.ico", include_in_schema=False)

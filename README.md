@@ -1,163 +1,119 @@
-# SafeSteps MVP — Meta Global AI Developer Hackathon
+# SafeSteps
 
-Kids in South Africa walk to school without phones. SafeSteps simulates a
-**breathable ankle band worn under a sock** that tracks GPS + heart rate +
-skin contact, detects anomalies in real time, and alerts parents fast.
+**An ankle or waist band that tells a parent or trusted contact within seconds when something is wrong, even where there is no signal.**
+Built for the Meta Global AI Developer Hackathon (26 Oct to 4 Nov 2026). Author: Gerald Magoro.
 
-## Layout
+## The problem
 
+In many South African schools children are not allowed to carry phones, so a child walking to school has no way to call for help and a parent has no way to know. The same gap affects adults: someone going to meet a stranger can lose their phone first, and a phone is the first thing taken from a person in danger.
+
+SafeSteps is a small body-worn band (ankle for a child, waist under clothing for an adult) that watches skin contact, heart rate, location and water, runs its safety rules on the band itself, and keeps working when there is no internet.
+
+> Low cost is a design goal so it can reach as many families as possible. **No costed bill of materials exists yet**, so this project makes no price claim.
+
+## What is built, and what is simulated
+
+| Area | Status |
+|---|---|
+| Rule engine, live alerts, acknowledge, 5-minute escalation timer | Built |
+| Meta Model API triage with tool calls, parent-language message | Built |
+| Offline store-and-forward: band buffers, flushes via nearest link | Built |
+| Parent app (setup, offline route map, vitals, alert screen) | Built |
+| One-click demo scenarios, no terminal needed | Built |
+| Phone as the band (real GPS, simulated heart rate and skin sensor) | Built |
+| Access PIN on every data endpoint | Built (single shared PIN) |
+| Personal baseline: Meta Model proposes, server limits, parent approves | Built (demo history is **synthetic**) |
+| Automated tests (rules, baseline, PIN, AI client) | Built (38 tests) |
+| Baseline learned from real trip logs | Roadmap, not built |
+| Band hardware, heart-rate and skin sensors | **Simulated** |
+| SMS fallback, ambulance (EMS) call | **Simulated** (written to a file or printed) |
+| Nearby help list | **Sample data** (the demo never dials it) |
+| Community mesh alert, audio and video bursts | Roadmap, not built |
+| User accounts, encryption at rest, full privacy-law review | Roadmap, not built |
+
+## How the Meta Model API is used
+
+- Model: `muse-wonder-1.0` through the OpenAI-compatible chat completions endpoint (`https://api.meta.ai/v1`).
+- **Alert triage agent** (`backend/ai.py`): after the rules raise an alert, the model is given tools (`get_recent_readings`, `get_child_profile`, `get_nearby_help`), calls them as needed, and returns a structured result: severity, confidence, likely-false-alarm flag, reasons, a plain message, and the same message in the parent's language.
+- **Safety by design:** rules fire first and the parent is notified immediately. The model annotates an alert and can never cancel or delay it. If the API is unreachable, the rule-based alert stands.
+- **Personal baseline** (`backend/baseline.py`): the model reads a child's recent trips and proposes a personal threshold for the one rule that causes false alarms (heart rate while still). Facts such as averages and ranges are computed in code, not by the model. The server clamps the proposal (never below what the child's own history supports, never above 150 bpm), and a parent must approve it. Band-off, drowning, faint and off-route rules are never personalised. The triage agent can also call `get_baseline` to judge whether an alert is out of character. The demo history is synthetic and labelled so.
+- **Cost control:** the model runs only on alerts, repeat alerts of the same type are folded for 60 seconds, and `/ai/status` shows calls, tokens and an estimated cost.
+- **Resilience:** automatic retries with back-off for flaky networks; `POST /ai/selftest` proves the key works.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  B[Band: sensors + on-band rules + buffer] -->|closest link: direct, relay, SMS| API
+  P[Phone as band: real GPS] --> API
+  API[FastAPI backend: rule engine] -->|WebSocket| A[Parent app]
+  API -->|background| M[Meta Model API triage]
+  M -->|update| API
+  API -->|no acknowledgement in 5 min| E[EMS escalation, simulated]
 ```
-safesteps/
-├── backend/            FastAPI: ingest, status, alert websocket, AI summary
-│   ├── main.py
-│   └── requirements.txt
-├── band-simulator/     Python band sim (stdlib only): normal + anomaly modes
-│   └── simulate.py
-├── parent-app/         React Native (Expo) parent app: onboarding, live, alert
-│   ├── App.js
-│   └── src/
-└── README.md
-```
 
-## Setup
-
-Windows (PowerShell), from this folder:
+## Quick start (Windows PowerShell)
 
 ```powershell
-# 1. Python env (project-local, used by backend + simulator)
 python -m venv .venv
-.venv\Scripts\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 pip install -r backend\requirements.txt
-# (equivalent: pip install fastapi "uvicorn[standard]" pydantic)
-
-# 2. Parent app
-cd parent-app
-npm install
+cd parent-app; npm install; npx expo export --platform web; cd ..
+$env:META_API_KEY = "<your key>"        # never commit keys
+$env:SAFESTEPS_PIN = "<choose a PIN>"   # optional: protects the API
+uvicorn backend.main:app --host 0.0.0.0 --port 8000
 ```
 
-macOS/Linux:
+Open `http://localhost:8000`. See `RUN-DEMO.md` for the demo, the public link and the phone-as-band page (`/band`).
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r backend/requirements.txt
-cd parent-app && npm install
-```
+Tests: `pip install -r requirements-dev.txt` then `pytest`.
 
-Optional — live AI summaries via the Meta Model API (`muse-wonder-1.0`):
+## Detection rules
 
-```powershell
-$env:META_API_KEY = "<your key from the dashboard>"
-$env:META_API_URL = "<model endpoint from the dashboard>"
-```
+| Alert | Trigger |
+|---|---|
+| `skin_off` | skin gap above 2.5 cm |
+| `hr_spike_no_movement` | heart rate above 130 bpm and under 2 m movement |
+| `possible_faint` | heart rate below 50 bpm and under 2 m movement |
+| `possible_drowning` | depth above 100 cm for over 30 s, heart rate above 130, under 1 m movement |
+| `off_route` | more than 15 m (`SAFESTEPS_OFF_ROUTE_M`) from the route for 5 minutes |
+| `early_departure` | movement before 06:00 local (`SAFESTEPS_EARLIEST_HOUR`) |
 
-Without these, the backend returns a rule-based summary so the demo
-always works offline. Never commit keys — use env vars only.
+Heart rate alone is a weak signal, which is why triage, parent acknowledgement and the personal baseline exist. False alarms are the main technical risk. Trade-off of a personal baseline: a real spike between the default and the personal threshold would not alert, which is why the parent decides and the threshold has a hard cap.
 
-## Run
+## Privacy and safety principles
 
-Terminal 1 — backend:
+- The wearer or guardian controls who is notified. This must never become covert tracking of another adult.
+- Saved logs round coordinates to about 100 m; the live alert to the contacts is exact.
+- The demo uses placeholder contacts and never dials a real number.
+- No real children's data is used or stored in this repository. Runtime data files are git-ignored.
+- The shared PIN is a demo-grade gate. Real deployment needs accounts, encryption at rest and a privacy-law review.
 
-```powershell
-.venv\Scripts\Activate.ps1
-uvicorn backend.main:app --reload --port 8000
-```
+## Demo
 
-Terminal 2 — band simulator (normal walk):
+1. **Parent tab:** Skip setup loads the demo profile (Naledi). The map is an offline drawing, no map tiles.
+2. **Live demo tab:** Play demo runs a scripted band through the real backend. "Dead zone, then nearest relay" shows the band's local alarm, offline buffering, the relay flush, the alert and the Meta triage.
+3. **Baseline tab:** load the synthetic history, run the Meta Model analysis, approve, then play "runner at the crossing" before and after to see the false alarm disappear while the safety rules stay unchanged.
+4. **Phone as band:** open `/band` on a phone (over the https public link), press Start band, fit the route where you stand, then walk. Heart rate and skin contact are controlled by buttons.
 
-```powershell
-.venv\Scripts\Activate.ps1
-python band-simulator\simulate.py --mode normal
-```
+## API (data endpoints need the PIN header `x-pin` when `SAFESTEPS_PIN` is set)
 
-Terminal 3 — parent app:
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/ingest`, `/ingest/batch` | Band reading, or a buffered batch |
+| GET | `/children/{id}/status` | Latest reading, trail, status |
+| GET, POST | `/route`, `/route/rebase`, `/route/reset` | Expected route |
+| POST | `/alerts/{id}/ack` | Acknowledge an alert |
+| WS | `/ws/alerts` | Live alerts and AI updates |
+| GET, POST | `/ai/status`, `/ai/selftest` | Meta Model usage and key check |
+| GET, POST | `/demo/scenarios`, `/demo/status`, `/demo/play` | One-click demo |
+| GET, POST | `/baseline/{id}`, `/baseline/{id}/seed`, `/analyze`, `/approve`, `/reset` | Personal baseline |
+| GET | `/health`, `/auth/check`, `/band` | Public |
 
-```powershell
-cd parent-app
-npx expo start
-```
+## Built during the hackathon
 
-Then open the app in Expo Go (same Wi-Fi) or press `w` for web.
-On a physical phone, set `BACKEND_URL` in `parent-app/src/api.js`
-to your PC's LAN IP (e.g. `http://192.168.1.20:8000`).
+The repository was started on 26 Oct 2026 or later and the commit history shows the work. The code was developed with the help of an AI coding assistant (Claude, by Anthropic) under the author's direction; the idea, design decisions, testing and demo are the author's.
 
-## Demo flow (3 minutes)
+## Roadmap
 
-1. **Normal walk** — simulator `--mode normal`: Home → Spaza (left) →
-   School. App map shows LIVE GPS + vitals, no alert.
-2. **Off-route** — `python band-simulator\simulate.py --mode offroute --fast 60`
-   (6 min compressed to ~6 s): band turns RIGHT at the junction.
-   After 5 min off-route the backend fires `off_route`.
-3. **Triggers** — try the others:
-   - `--mode skinoff` → `skin_off` (gap 3 cm > 2.5 cm)
-   - `--mode spike` → `hr_spike_no_movement` (HR 90 → 145, still)
-   - `--mode faint` → `possible_faint` (still + HR drop)
-   - `--mode demo --fast 20` runs the full reel in ~25 s.
-4. Each alert returns
-   `{anomaly, type, location, ai_summary, actions}`,
-   writes `backend/alert.json` (with 20 s burst placeholders),
-   and broadcasts on `ws://localhost:8000/ws/alerts`.
-5. **Call All** — in the app, open the alert screen and press
-   CALL ALL to dial the 5 emergency contacts, with nearby
-   SAPS/clinic numbers and burst clips alongside.
-
-## API reference
-
-| Method | Path                         | Purpose                          |
-| ------ | ---------------------------- | -------------------------------- |
-| POST   | `/ingest`                    | Band reading → anomaly or ok     |
-| GET    | `/children/{id}/status`      | Latest reading + status          |
-| GET    | `/route`                     | Expected route + thresholds      |
-| GET    | `/health`                    | Liveness                         |
-| WS     | `/ws/alerts`                 | Live alert broadcast             |
-
-Reading schema:
-
-```json
-{"child_id": "child-001", "gps_lat": -26.2475, "gps_lon": 27.8532,
- "hr": 92, "skin_distance_cm": 0.4, "battery": 96}
-```
-
-Trigger logic:
-
-- `skin_off`: skin gap > 2.5 cm
-- `off_route`: > 2 m off route for > 5 min
-- `hr_spike_no_movement`: HR > 130 with < 2 m movement
-- `possible_faint`: HR < 50 with < 2 m movement
-- `early_departure`: movement before 06:00 local (override: `SAFESTEPS_EARLIEST_HOUR`)
-- `possible_drowning`: depth > 100 cm + submerged > 30 s + < 1 m movement + HR > 130 (immediate)
-- `water_watch` (not an alert): depth 20–80 cm with movement → watch-only until dry
-
-## New features
-
-- **Favorite routes + daily schedule** — `POST /routes` saves a named
-  route (waypoints, destination, arrival/departure, supervisor contacts)
-  and pre-populates the EMS cache (mock SAPS 10111 + nearby clinic);
-  `GET /routes`, `POST /schedule`, `GET /schedule/{date}` manage the
-  day plan. Persisted in `backend/routes.json`. The onboarding screen
-  has “Save as Favorite” plus a Trip Mode toggle (min 2 supervisors).
-- **Drowning detection** — the band is 12 h waterproof and streams
-  `water_depth_cm` + `water_time_sec`. Simulator:
-  `--mode pool_play` (40 cm, splashing) and `--mode drowning`
-  (120 cm, 60 s still, HR 145).
-- **EMS auto-escalation** — every alert gets an `id`. `POST
-  /alerts/{id}/ack` acknowledges it; with no ack in 5 min
-  (override: `SAFESTEPS_ACK_TIMEOUT_SECS`) the backend writes
-  `backend/ems_call.json` (child name, parent, 5 contacts, age,
-  location, nature, profile link) and broadcasts `ems_escalation`.
-  Register the profile via `POST /children/{id}/profile`.
-
-## Cost model (target < R300 per child)
-
-- **Band BOM < R300**: BLE SoC + PPG heart-rate sensor + capacitive
-  skin-contact pad + GPS (duty-cycled) in a breathable sock-band;
-  NB-IoT module for areas without phone coverage.
-- **NB-IoT**: one small packet per 2 s window (batched to ~1/min
-  when calm, burst on alert) keeps data under a few MB/month —
-  a ~R15/month pooled IoT SIM covers it.
-- **Community mesh**: spaza shops and schools run solar BLE/NB-IoT
-  relays so bands hop to the cloud even where coverage is thin;
-  alerts fan out to 5 contacts + SMS fallback + 500 m community
-  broadcast at near-zero marginal cost.
-- **Backend**: single small VPS (or serverless) per district;
-  AI summaries only on alert, not per ping.
+Real band hardware; baselines learned from real trip logs; accounts and encryption; SMS gateway; community relays; audio and video bursts; reviewing handling of personal data under South Africa's Protection of Personal Information Act.

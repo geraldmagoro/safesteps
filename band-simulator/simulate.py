@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import math
 import random
 import time
@@ -234,10 +235,20 @@ def edge_check(r: dict, prev: dict | None):
     return None
 
 
+PIN = os.getenv("SAFESTEPS_PIN", "")
+
+
+def _hdr() -> dict:
+    h = {"Content-Type": "application/json"}
+    if PIN:
+        h["x-pin"] = PIN
+    return h
+
+
 def post(backend_url: str, payload: dict) -> str:
     body = json.dumps(payload).encode()
     req = urllib.request.Request(
-        backend_url, data=body, headers={"Content-Type": "application/json"}
+        backend_url, data=body, headers=_hdr()
     )
     try:
         with urllib.request.urlopen(req, timeout=3) as resp:
@@ -252,7 +263,7 @@ def post(backend_url: str, payload: dict) -> str:
 def post_batch(backend_url: str, batch: list) -> str:
     url = backend_url.rstrip("/") + "/batch"
     req = urllib.request.Request(
-        url, data=json.dumps(batch).encode(), headers={"Content-Type": "application/json"}
+        url, data=json.dumps(batch).encode(), headers=_hdr()
     )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -272,6 +283,7 @@ def main() -> None:
     ap.add_argument("--interval", type=float, default=2.0, help="seconds per tick")
     ap.add_argument("--fast", type=float, default=1.0, help="time-lapse divisor")
     ap.add_argument("--ticks", type=int, default=0, help="max ticks (0 = run mode default)")
+    ap.add_argument("--pin", default="", help="access PIN (or set SAFESTEPS_PIN)")
     ap.add_argument("--link-plan", default="direct", help='e.g. "direct:20,offline:30,relay:15,direct"')
     args = ap.parse_args()
 
@@ -289,6 +301,8 @@ def main() -> None:
     }[args.mode]()
 
     print(f"[band {args.child_id}] mode={args.mode} -> {args.backend} (every {args.interval}s)")
+    global PIN
+    PIN = args.pin or PIN
     plan = parse_plan(args.link_plan)
     outbox: list = []
     prev = None

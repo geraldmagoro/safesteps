@@ -4,16 +4,37 @@ import OnboardingScreen from './src/screens/OnboardingScreen';
 import MapScreen from './src/screens/MapScreen';
 import AlertScreen from './src/screens/AlertScreen';
 import DemoScreen from './src/screens/DemoScreen';
-import { WS_URL, saveChildProfile, saveRoute, fetchAIStatus } from './src/api';
+import BaselineScreen from './src/screens/BaselineScreen';
+import { wsUrl, saveChildProfile, saveRoute, fetchAIStatus, authCheck, setPin } from './src/api';
 import { C } from './src/theme';
-import { T, Btn } from './src/ui';
+import { T, Btn, Input } from './src/ui';
 
 const DEMO_PROFILE = {
   childName: 'Naledi', school: 'Orlando East Primary', route: 'Home -> Spaza (left) -> School',
-  contacts: ['+27820000001', '+27820000002', '+27820000003', '+27820000004', '+27820000005'],
+  // Labelled placeholders, never real numbers: demo mode must not dial anyone.
+  contacts: ['Mother (demo)', 'Father (demo)', 'Gogo (demo)', 'Neighbour (demo)', 'Teacher (demo)'],
   photo: null, language: 'isiZulu', childId: 'child-001', favoriteRoute: 'School run',
-  tripMode: false, supervisors: [],
+  tripMode: false, supervisors: [], demo: true,
 };
+
+function PinScreen({ onUnlock }) {
+  const [v, setV] = useState('');
+  const [err, setErr] = useState('');
+  const go = async () => {
+    setPin(v.trim());
+    const r = await authCheck();
+    if (r.ok) onUnlock(); else setErr('Wrong PIN. Try again.');
+  };
+  return (
+    <View style={{ padding: 20, gap: 12 }}>
+      <T head style={{ fontSize: 24 }}>Enter access PIN</T>
+      <T style={{ color: C.mute }}>This demo is protected, because it shows a child’s location.</T>
+      <Input value={v} onChangeText={setV} placeholder="PIN" secureTextEntry keyboardType="numeric" />
+      {err ? <T style={{ color: C.red }}>{err}</T> : null}
+      <Btn title="Unlock" onPress={go} />
+    </View>
+  );
+}
 
 function Tab({ label, active, onPress }) {
   return (
@@ -33,6 +54,8 @@ export default function App() {
   const [ws, setWs] = useState('connecting');
   const [ems, setEms] = useState(null);
   const [aiStat, setAiStat] = useState(null);
+  const [authDone, setAuthDone] = useState(false);
+  const [needPin, setNeedPin] = useState(false);
   const alertRef = useRef(null);
   const tabRef = useRef('parent');
   const profileRef = useRef(null);
@@ -50,11 +73,16 @@ export default function App() {
     } catch (e) { /* backend offline: app keeps working with mock data */ }
   }, []);
 
+  useEffect(() => {
+    authCheck().then((a) => { setNeedPin(!!a.pin_required && !a.ok); setAuthDone(true); });
+  }, []);
+
   // Live push over WebSocket with auto-reconnect (works before and after setup).
   useEffect(() => {
+    if (!authDone || needPin) return undefined;
     let sock; let timer; let closed = false;
     const connect = () => {
-      try { sock = new WebSocket(WS_URL); } catch (e) { timer = setTimeout(connect, 3000); return; }
+      try { sock = new WebSocket(wsUrl()); } catch (e) { timer = setTimeout(connect, 3000); return; }
       sock.onopen = () => setWs('live');
       sock.onclose = () => { setWs('reconnecting'); if (!closed) timer = setTimeout(connect, 3000); };
       sock.onerror = () => {};
@@ -74,21 +102,26 @@ export default function App() {
     };
     connect();
     return () => { closed = true; clearTimeout(timer); if (sock) sock.close(); };
-  }, []);
+  }, [authDone, needPin]);
 
   useEffect(() => {
+    if (!authDone || needPin) return undefined;
     const tick = async () => setAiStat(await fetchAIStatus());
     tick();
     const t = setInterval(tick, 6000);
     return () => clearInterval(t);
-  }, []);
+  }, [authDone, needPin]);
 
   const aiLine = aiStat
     ? (aiStat.configured ? `Meta ${aiStat.model} · ${aiStat.calls} calls · ~$${aiStat.est_cost_usd}` : 'AI: no key set')
     : 'AI: backend unreachable';
 
   let body;
-  if (tab === 'demo') {
+  if (needPin) {
+    body = <PinScreen onUnlock={() => setNeedPin(false)} />;
+  } else if (tab === 'baseline') {
+    body = <BaselineScreen />;
+  } else if (tab === 'demo') {
     body = <DemoScreen alert={alert} aiStat={aiStat} ws={ws}
       onOpenAlert={() => { setTab('parent'); if (profile) setScreen('alert'); }} />;
   } else if (!profile) {
@@ -119,6 +152,7 @@ export default function App() {
         <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <Tab label="Parent" active={tab === 'parent'} onPress={() => setTab('parent')} />
           <Tab label="Live demo" active={tab === 'demo'} onPress={() => setTab('demo')} />
+          <Tab label="Baseline" active={tab === 'baseline'} onPress={() => setTab('baseline')} />
           <View style={{ flex: 1, minWidth: 120 }}>
             <T mono style={{ color: ws === 'live' ? C.green : C.amber, fontSize: 11 }}>● alerts {ws}</T>
             <T mono style={{ color: C.mute, fontSize: 11 }}>{aiLine}</T>

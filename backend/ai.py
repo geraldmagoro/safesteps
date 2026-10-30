@@ -176,6 +176,14 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "get_baseline",
+            "description": "What is normal for this child from past trips: usual heart-rate ranges, departure time, and false-alarm patterns. Use it to judge whether an alert is out of character.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_nearby_help",
             "description": "Nearest police stations and clinics to the alert location.",
             "parameters": {"type": "object", "properties": {}},
@@ -189,7 +197,7 @@ SYSTEM = (
     "raised this alert and the parent has ALREADY been notified; you cannot cancel "
     "or delay it. Your job is to help the parent act fast and well. Be honest about "
     "uncertainty and never downplay a possible emergency (drowning, faint, band "
-    "removed away from school are serious). Use tools if you need history or context. "
+    "removed away from school are serious). Use tools if you need history or context, and call get_baseline to compare against what is normal for this child. A reading that is normal for this child may be a false alarm, but say so honestly and never tell the parent to ignore an alert. "
     "Finish with ONLY a JSON object with keys: "
     '"severity" (low|medium|high|critical), "confidence" (0-1), '
     '"likely_false_alarm" (boolean), "reasons" (list of up to 3 short strings), '

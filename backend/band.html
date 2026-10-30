@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SafeSteps band (phone)</title>
+<style>
+  :root { --bg:#16130F; --panel:#1E1A14; --panel2:#26211A; --line:#3A3226; --text:#F5EFE0; --mute:#B8AE98;
+          --orange:#DC8811; --blue:#6BB6FF; --red:#E55A3D; --green:#3BA873; --amber:#E0B03A; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:"Instrument Sans","Segoe UI",system-ui,sans-serif;
+         padding:14px 14px 40px; max-width:560px; margin-inline:auto; }
+  h1 { font-family:Fraunces,Georgia,serif; font-size:24px; margin:4px 0 2px; }
+  p.note { color:var(--mute); font-size:13px; margin:0 0 12px; line-height:1.4; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:12px; margin-bottom:12px; }
+  .label { color:var(--mute); font-size:11px; letter-spacing:.8px; text-transform:uppercase; margin-bottom:6px; }
+  button { font:inherit; font-weight:700; border-radius:10px; border:1px solid var(--line); background:transparent; color:var(--text);
+           padding:12px 14px; cursor:pointer; }
+  button.primary { background:var(--orange); border-color:var(--orange); color:#1A1308; }
+  button.on { background:var(--orange); border-color:var(--orange); color:#1A1308; }
+  button.danger.on { background:var(--red); border-color:var(--red); color:#fff; }
+  button:disabled { opacity:.45; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; }
+  .row > * { flex:1 1 0; min-width:90px; }
+  input[type=text], input[type=password] { width:100%; padding:11px; border-radius:10px; border:1px solid var(--line);
+           background:var(--panel2); color:var(--text); font:inherit; }
+  input[type=range] { width:100%; accent-color:var(--orange); }
+  .chip { display:inline-block; border:1px solid var(--line); border-radius:99px; padding:2px 10px; font-size:12px; margin:0 6px 6px 0; }
+  .mono { font-family:"JetBrains Mono",Consolas,monospace; font-size:12px; color:var(--mute); }
+  #alarm { display:none; background:var(--red); color:#fff; border-radius:14px; padding:14px; font-weight:800; text-align:center;
+           margin-bottom:12px; animation:flash 0.6s infinite alternate; }
+  @keyframes flash { from { opacity:1 } to { opacity:.55 } }
+  #log { max-height:150px; overflow:auto; }
+</style>
+</head>
+<body>
+<h1>SafeSteps band</h1>
+<p class="note">This phone stands in for the ankle or waist band. <b>GPS is real.</b> Heart rate and skin contact are simulated by the controls below, because a phone has neither sensor.</p>
+
+<div id="alarm">BAND ALARM: buzzer + LED on. No internet needed.</div>
+
+<div class="card" id="pinCard" style="display:none">
+  <div class="label">Access PIN</div>
+  <input id="pin" type="password" inputmode="numeric" placeholder="PIN">
+  <div style="height:8px"></div>
+  <button class="primary" id="pinBtn" style="width:100%">Unlock</button>
+</div>
+
+<div class="card">
+  <div class="label">Band</div>
+  <input id="child" type="text" value="child-001" aria-label="Child id">
+  <div style="height:8px"></div>
+  <div class="row">
+    <button class="primary" id="start">Start band</button>
+    <button id="fake" title="Use a simulated walk instead of real GPS">Fake GPS (desk)</button>
+  </div>
+  <div style="height:8px"></div>
+  <span class="chip" id="cGps">GPS: not started</span>
+  <span class="chip" id="cLink">Link: direct</span>
+  <span class="chip" id="cBuf">Buffered: 0</span>
+  <span class="chip" id="cSent">Sent: 0</span>
+</div>
+
+<div class="card">
+  <div class="label">1 · Fit the route to where you are</div>
+  <p class="note" style="margin-bottom:8px">Stand at "home", press Set HOME. Walk 20 m or more to "school", press Set SCHOOL. The route and map follow you.</p>
+  <div class="row">
+    <button id="setHome">Set HOME here</button>
+    <button id="setSchool">Set SCHOOL here</button>
+    <button id="resetRoute">Reset demo route</button>
+  </div>
+  <div class="mono" id="routeMsg" style="margin-top:8px"></div>
+</div>
+
+<div class="card">
+  <div class="label">2 · Simulated sensors</div>
+  <div class="row" style="margin-bottom:10px">
+    <button id="skin" class="danger">Band ON</button>
+    <button id="still">Child moving</button>
+  </div>
+  <div class="label">Heart rate: <b id="hrVal">90</b> bpm</div>
+  <input type="range" id="hr" min="40" max="180" value="90">
+  <div class="row" style="margin-top:8px">
+    <button data-hr="90">Calm 90</button>
+    <button data-hr="120">Run 120</button>
+    <button data-hr="145">Panic 145</button>
+    <button data-hr="40">Faint 40</button>
+  </div>
+  <p class="note" style="margin-top:8px">"Child stopped" freezes the reported position, because phone GPS jitters even when still.</p>
+</div>
+
+<div class="card">
+  <div class="label">3 · Connection (closest link first)</div>
+  <div class="row">
+    <button id="lDirect" class="on">Direct</button>
+    <button id="lRelay">Relay</button>
+    <button id="lOffline">Offline</button>
+  </div>
+  <p class="note" style="margin-top:8px">Offline buffers readings on this phone and flushes them in order when you switch back. If the real connection drops, it buffers by itself.</p>
+</div>
+
+<div class="card"><div class="label">Log</div><div id="log" class="mono"></div></div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var S = { fix: null, frozen: null, hr: 90, skinOff: false, still: false, link: 'direct', buffer: [], prev: null,
+            sent: 0, timer: null, watch: null, fake: false, fakePos: null, homePending: null, pin: '' };
+  try { S.pin = localStorage.getItem('ss_pin') || ''; } catch (e) {}
+
+  function log(m) { var d = $('log'); d.innerHTML = '[' + new Date().toLocaleTimeString() + '] ' + m + '<br>' + d.innerHTML; }
+  function headers() { var h = { 'Content-Type': 'application/json' }; if (S.pin) h['x-pin'] = S.pin; return h; }
+  function api(path, opts) {
+    opts = opts || {}; opts.headers = headers();
+    return fetch(path, opts).then(function (r) { if (!r.ok) { return r.text().then(function (t) { throw new Error(r.status + ' ' + t.slice(0, 120)); }); } return r.json(); });
+  }
+  function chips() {
+    $('cLink').textContent = 'Link: ' + S.link;
+    $('cBuf').textContent = 'Buffered: ' + S.buffer.length;
+    $('cSent').textContent = 'Sent: ' + S.sent;
+  }
+  function metres(a, b) {
+    var kx = 111320 * Math.cos(a.lat * Math.PI / 180);
+    return Math.hypot((b.lon - a.lon) * kx, (b.lat - a.lat) * 110540);
+  }
+
+  // ---- access PIN
+  api('/auth/check').then(function (r) { if (r.pin_required && !r.ok) $('pinCard').style.display = 'block'; }).catch(function () {});
+  $('pinBtn').onclick = function () {
+    S.pin = $('pin').value.trim();
+    api('/auth/check').then(function (r) {
+      if (r.ok) { try { localStorage.setItem('ss_pin', S.pin); } catch (e) {} $('pinCard').style.display = 'none'; log('PIN accepted'); }
+      else log('Wrong PIN');
+    }).catch(function (e) { log('PIN check failed: ' + e.message); });
+  };
+
+  // ---- position (real GPS or fake desk walk)
+  function onPos(p) { S.fix = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy }; $('cGps').textContent = 'GPS: ±' + Math.round(p.coords.accuracy) + ' m'; }
+  function onErr(e) { $('cGps').textContent = 'GPS: ' + (e.message || 'error'); log('GPS error: ' + (e.message || e.code)); }
+  function startGps() {
+    if (!navigator.geolocation) { log('No geolocation here. Use Fake GPS.'); return; }
+    S.watch = navigator.geolocation.watchPosition(onPos, onErr, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+    try { if (navigator.wakeLock) navigator.wakeLock.request('screen').catch(function () {}); } catch (e) {}
+  }
+  function fakeStep() {
+    if (!S.fakePos) { return; }
+    S.fakePos = { lat: S.fakePos.lat + (Math.random() - .5) * 2e-5, lon: S.fakePos.lon + (Math.random() - .5) * 2e-5, acc: 5 };
+    S.fix = S.fakePos; $('cGps').textContent = 'GPS: simulated';
+  }
+
+  // ---- band rules (run on the band itself, no internet needed)
+  function edgeCheck(r, prev) {
+    var moved = prev ? metres({ lat: prev.gps_lat, lon: prev.gps_lon }, { lat: r.gps_lat, lon: r.gps_lon }) : 99;
+    if (r.skin_distance_cm > 2.5) return 'band off skin';
+    if (r.hr > 130 && moved < 2) return 'heart rate spike, no movement';
+    if (r.hr > 0 && r.hr < 50 && moved < 2) return 'possible faint';
+    return null;
+  }
+  function alarm(why) {
+    var a = $('alarm'); a.textContent = 'BAND ALARM (' + why + '): buzzer + LED on. No internet needed.'; a.style.display = 'block';
+    try { if (navigator.vibrate) navigator.vibrate([300, 150, 300]); } catch (e) {}
+    clearTimeout(alarm.t); alarm.t = setTimeout(function () { a.style.display = 'none'; }, 4000);
+  }
+
+  // ---- send / buffer / flush
+  function send(reading) {
+    var batch = S.buffer.splice(0).map(function (b) { b.link = 'buffered'; return b; });
+    var done = function (n) { S.sent += n; chips(); };
+    if (batch.length) {
+      batch.push(reading);
+      return api('/ingest/batch', { method: 'POST', body: JSON.stringify(batch) })
+        .then(function () { done(batch.length); log('Flushed ' + batch.length + ' buffered readings'); })
+        .catch(function (e) { S.buffer = batch.slice(0, -1).concat([reading]); chips(); log('Offline: ' + e.message); });
+    }
+    return api('/ingest', { method: 'POST', body: JSON.stringify(reading) })
+      .then(function (res) { done(1); if (res.anomaly && !res.deduped) log('ALERT raised: ' + res.type); })
+      .catch(function (e) { S.buffer.push(reading); chips(); log('No connection, buffering (' + e.message + ')'); });
+  }
+  function tick() {
+    if (S.fake) fakeStep();
+    if (!S.fix) return;
+    var pos = S.still && S.frozen ? S.frozen : S.fix;
+    var r = { child_id: $('child').value.trim() || 'child-001', gps_lat: pos.lat, gps_lon: pos.lon, hr: S.hr,
+              skin_distance_cm: S.skinOff ? 3.5 : 0.4, battery: S.battery || 100, water_depth_cm: 0, water_time_sec: 0,
+              ts: Math.round(Date.now() / 100) / 10, link: S.link === 'relay' ? 'relay' : 'direct', edge_alarm: false };
+    var why = edgeCheck(r, S.prev);
+    if (why) { r.edge_alarm = true; alarm(why); }
+    S.prev = r;
+    if (S.link === 'offline') { S.buffer.push(r); chips(); } else { send(r); }
+    chips();
+  }
+  function start() {
+    if (S.timer) return;
+    try { if (navigator.getBattery) navigator.getBattery().then(function (b) { S.battery = Math.round(b.level * 100); }); } catch (e) {}
+    if (!S.fake) startGps();
+    S.timer = setInterval(tick, 2000);
+    $('start').textContent = 'Band running'; $('start').disabled = true;
+    log('Band started');
+  }
+  $('start').onclick = start;
+  $('fake').onclick = function () {
+    S.fake = true;
+    api('/route').then(function (r) { S.fakePos = { lat: r.home[0], lon: r.home[1], acc: 5 }; S.fix = S.fakePos; log('Fake GPS at the route start'); start(); })
+      .catch(function () { S.fakePos = { lat: -26.2485, lon: 27.854, acc: 5 }; S.fix = S.fakePos; start(); });
+  };
+
+  // ---- route fitting
+  function needFix() { if (!S.fix) { $('routeMsg').textContent = 'Start the band first and wait for a GPS fix.'; return false; } return true; }
+  $('setHome').onclick = function () {
+    if (!needFix()) return;
+    S.homePending = [S.fix.lat, S.fix.lon]; $('routeMsg').textContent = 'HOME set. Walk 20 m or more, then press Set SCHOOL here.';
+  };
+  $('setSchool').onclick = function () {
+    if (!needFix()) return;
+    if (!S.homePending) { $('routeMsg').textContent = 'Press Set HOME first.'; return; }
+    api('/route/rebase', { method: 'POST', body: JSON.stringify({ home: S.homePending, school: [S.fix.lat, S.fix.lon] }) })
+      .then(function () { $('routeMsg').textContent = 'Route fitted. The parent map now follows this place.'; S.homePending = null; log('Route re-based'); })
+      .catch(function (e) { $('routeMsg').textContent = 'Could not set route: ' + e.message; });
+  };
+  $('resetRoute').onclick = function () {
+    api('/route/reset', { method: 'POST', body: '{}' }).then(function () { $('routeMsg').textContent = 'Back to the demo route.'; log('Route reset'); }).catch(function (e) { $('routeMsg').textContent = e.message; });
+  };
+
+  // ---- sensor controls
+  $('skin').onclick = function () { S.skinOff = !S.skinOff; $('skin').textContent = S.skinOff ? 'Band OFF' : 'Band ON'; $('skin').classList.toggle('on', S.skinOff); };
+  $('still').onclick = function () {
+    S.still = !S.still; if (S.still) S.frozen = S.fix; $('still').textContent = S.still ? 'Child stopped' : 'Child moving'; $('still').classList.toggle('on', S.still);
+  };
+  $('hr').oninput = function () { S.hr = +$('hr').value; $('hrVal').textContent = S.hr; };
+  Array.prototype.forEach.call(document.querySelectorAll('button[data-hr]'), function (b) {
+    b.onclick = function () { S.hr = +b.getAttribute('data-hr'); $('hr').value = S.hr; $('hrVal').textContent = S.hr; };
+  });
+  function setLink(l) {
+    S.link = l;
+    ['lDirect', 'lRelay', 'lOffline'].forEach(function (id) { $(id).classList.remove('on'); });
+    $({ direct: 'lDirect', relay: 'lRelay', offline: 'lOffline' }[l]).classList.add('on');
+    if (l === 'relay') log('Nearest relay found (closest connection)');
+    if (l === 'offline') log('Offline: buffering on the band');
+    chips();
+  }
+  $('lDirect').onclick = function () { setLink('direct'); };
+  $('lRelay').onclick = function () { setLink('relay'); };
+  $('lOffline').onclick = function () { setLink('offline'); };
+  chips();
+})();
+</script>
+</body>
+</html>

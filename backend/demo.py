@@ -43,6 +43,11 @@ SCENARIOS = [
         "blurb": "Child leaves the route. The 5-minute timer is fast-forwarded and labelled in the log.",
     },
     {
+        "id": "runner_crossing",
+        "title": "Late, running, waits at a crossing",
+        "blurb": "A heart-rate alert that is a likely false alarm for this child. Run it before and after approving a personal baseline.",
+    },
+    {
         "id": "drowning",
         "title": "Possible drowning (time-compressed)",
         "blurb": "Deep water, no movement, racing heart rate. Submersion timer is fast-forwarded.",
@@ -79,18 +84,27 @@ def _edge_check(r: dict, prev: dict | None):
 
 
 class DemoRunner:
-    def __init__(self, ingest_one: Callable, get_state: Callable, hub, reading_cls):
+    def __init__(self, ingest_one: Callable, get_state: Callable, hub, reading_cls, get_route: Callable = None):
         self.ingest_one = ingest_one
         self.get_state = get_state
         self.hub = hub
         self.Reading = reading_cls
+        self.get_route = get_route or (lambda: [HOME, SPAZA, SCHOOL])
+        self._apply_route()
         self.running = False
         self.scenario: str | None = None
         self.log: List[dict] = []
         self._prev: dict | None = None
-        self._pos = HOME
+        self._pos = self.home
 
     # ---------------------------------------------------------------- helpers
+    def _apply_route(self) -> None:
+        """Use the current expected route (it can be re-based to wherever the demo is)."""
+        r = [tuple(p) for p in self.get_route()]
+        self.home, self.spaza, self.school = r[0], r[1], r[2]
+        kx = 111320.0 * math.cos(math.radians(self.spaza[0]))
+        self.wrong = (self.spaza[0], self.spaza[1] + 200.0 / kx)  # 200 m east of the Spaza stop
+
     async def emit(self, kind: str, msg: str) -> None:
         rec = {"event": "demo", "kind": kind, "msg": msg,
                "t": datetime.now(timezone.utc).isoformat()}
@@ -111,7 +125,8 @@ class DemoRunner:
         # keep night-time demos clean: no "early departure" alert on a normal walk
         st.early_flag_dates.append(datetime.now().astimezone().date().isoformat())
         self._prev = None
-        self._pos = HOME
+        self._apply_route()
+        self._pos = self.home
 
     def _reading(self, lat, lon, hr, **kw) -> dict:
         base = {
@@ -137,7 +152,7 @@ class DemoRunner:
     # ------------------------------------------------------------- scenarios
     async def _normal_walk(self, n: int, link: str = "direct", hr0: int = 90):
         for i in range(n):
-            rd = self._walk(SPAZA, hr0 + i)
+            rd = self._walk(self.spaza, hr0 + i)
             await self._push(rd, link)
             self._prev = rd
             await asyncio.sleep(TICK_S)
@@ -182,7 +197,7 @@ class DemoRunner:
         await self._normal_walk(4)
         await self.emit("scenario", "Child takes a wrong turn (positions fast-forwarded).")
         for _ in range(5):
-            lat, lon = _move_toward(self._pos[0], self._pos[1], WRONG_TURN[0], WRONG_TURN[1], 45)
+            lat, lon = _move_toward(self._pos[0], self._pos[1], self.wrong[0], self.wrong[1], 45)
             self._pos = (lat, lon)
             await self._push(self._reading(lat, lon, 104), "direct")
             await asyncio.sleep(TICK_S)
@@ -190,6 +205,33 @@ class DemoRunner:
         st = self.get_state(CHILD_ID)
         st.off_route_since = time.time() - 301
         await self._push(self._reading(self._pos[0], self._pos[1], 106), "direct")
+
+    async def run_runner_crossing(self):
+        st = self.get_state(CHILD_ID)
+        thr = st.hr_spike_override or 130
+        await self.emit("scenario", f"Naledi is late and runs to school. Heart-rate rule in force: {thr} bpm.")
+        await self._normal_walk(3, hr0=100)
+        await self.emit("scenario", "She runs (moving, heart rate climbing).")
+        for hr in (122, 128, 134, 136):
+            rd = self._walk(self.spaza, hr)
+            rd["gps_lat"], rd["gps_lon"] = _move_toward(self._pos[0], self._pos[1], self.spaza[0], self.spaza[1], 6)
+            self._pos = (rd["gps_lat"], rd["gps_lon"])
+            await self._push(rd, "direct")
+            self._prev = rd
+            await asyncio.sleep(TICK_S)
+        await self.emit("scenario", "She stops at a crossing, breathing hard (still, heart rate 138).")
+        fired = False
+        for _ in range(5):
+            lat, lon = self._pos
+            rd = self._reading(lat, lon, 138)
+            res = await self._push(rd, "direct")
+            fired = fired or bool(res.get("anomaly"))
+            self._prev = rd
+            await asyncio.sleep(TICK_S)
+        if fired:
+            await self.emit("note", "Alert fired: the default rule cannot know this is normal for her. Open the Baseline tab to see her history.")
+        else:
+            await self.emit("note", f"No alert: 138 bpm is below her parent-approved threshold of {thr} bpm. Safety rules for band-off, drowning, faint and off-route are unchanged.")
 
     async def run_drowning(self):
         await self.emit("scenario", "Child reaches water near the route.")
@@ -220,10 +262,10 @@ class DemoRunner:
             self.running = False
 
 
-def install(app, ingest_one, get_state, hub, reading_cls) -> DemoRunner:
+def install(app, ingest_one, get_state, hub, reading_cls, get_route=None) -> DemoRunner:
     from fastapi import HTTPException
 
-    runner = DemoRunner(ingest_one, get_state, hub, reading_cls)
+    runner = DemoRunner(ingest_one, get_state, hub, reading_cls, get_route)
     valid = {s["id"] for s in SCENARIOS}
 
     @app.get("/demo/scenarios")

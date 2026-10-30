@@ -30,7 +30,8 @@ export default function MapScreen({ profile, onAlert, hasAlert }) {
     fetchRoute().then(setRoute);
     refresh();
     const t = setInterval(refresh, 2000);
-    return () => clearInterval(t);
+    const t2 = setInterval(() => fetchRoute().then(setRoute), 8000);
+    return () => { clearInterval(t); clearInterval(t2); };
   }, []);
 
   const last = status?.last;

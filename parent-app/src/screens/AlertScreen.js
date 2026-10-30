@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { View, ScrollView, Linking } from 'react-native';
-import { MOCK_ALERT, NEARBY_HELP, ackAlert, DEFAULT_ROUTE } from '../api';
+import { MOCK_ALERT, NEARBY_HELP, ackAlert, DEFAULT_ROUTE, fetchRoute } from '../api';
 import { C, LINK_COLOR } from '../theme';
 import { T, Btn, Card, Chip } from '../ui';
 import RouteMap from '../RouteMap';
@@ -36,6 +36,9 @@ export function Triage({ a }) {
 export default function AlertScreen({ profile, alert, onBack }) {
   const a = alert || MOCK_ALERT;
   const [acked, setAcked] = useState(false);
+  const [route, setRoute] = useState(DEFAULT_ROUTE);
+  const [note, setNote] = useState('');
+  useEffect(() => { fetchRoute().then(setRoute); }, []);
   const loc = [a.location.gps_lat, a.location.gps_lon];
 
   const ack = async () => {
@@ -43,8 +46,13 @@ export default function AlertScreen({ profile, alert, onBack }) {
   };
   const callAll = () => {
     // MVP: dial the first contact; v2 loops all 5 with SMS fallback.
+    if (profile.demo) { setNote('Demo mode: nobody is dialled. In real use this calls your first contact.'); return; }
     const first = profile.contacts[0].replace(/\s/g, '');
     Linking.openURL(`tel:${first}`);
+  };
+  const callHelp = (h) => {
+    // The list is sample data and may not be real numbers: never dial from it in the demo.
+    setNote(`Demo mode: would call ${h.name}. Numbers in this list are sample data.`);
   };
 
   return (
@@ -54,7 +62,7 @@ export default function AlertScreen({ profile, alert, onBack }) {
         <T style={{ color: C.mute, marginTop: 2 }}>{a.detail}</T>
       </View>
 
-      <RouteMap route={DEFAULT_ROUTE} last={{ gps_lat: loc[0], gps_lon: loc[1] }} alertLoc={loc} offRouteM={999} />
+      <RouteMap route={route} last={{ gps_lat: loc[0], gps_lon: loc[1] }} alertLoc={loc} offRouteM={999} />
       <T mono style={{ color: C.mute, fontSize: 12 }}>{loc[0].toFixed(5)}, {loc[1].toFixed(5)}</T>
 
       {a.link && a.link !== 'direct' && (
@@ -81,6 +89,7 @@ export default function AlertScreen({ profile, alert, onBack }) {
             title={acked === true ? 'Acknowledged · EMS escalation stopped' : acked === 'error' ? 'Ack failed · retry' : 'I SEE THIS (acknowledge)'} />
         ) : null}
         <Btn kind="danger" title="CALL FIRST CONTACT" onPress={callAll} />
+        {note ? <T style={{ color: C.amber, fontSize: 12 }}>{note}</T> : null}
       </View>
 
       <Card>
@@ -93,7 +102,7 @@ export default function AlertScreen({ profile, alert, onBack }) {
         {NEARBY_HELP.map((h) => (
           <View key={h.name} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
             <T>{h.kind}: {h.name} ({h.dist_m} m)</T>
-            <Btn small kind="ghost" title="Call" onPress={() => Linking.openURL(`tel:${h.phone}`)} />
+            <Btn small kind="ghost" title="Call (demo)" onPress={() => callHelp(h)} />
           </View>
         ))}
       </Card>
