@@ -38,7 +38,7 @@ export default function RouteMap({ route, last, trail = [], alertLoc, offRouteM 
   const hot = offRouteM > (route.off_route_dist_m || 15);
 
   return (
-    <View style={{ borderRadius: 14, overflow: 'hidden', borderWidth: 1, borderColor: C.line }}>
+    <View style={{ borderRadius: 14, overflow: 'hidden', borderWidth: 1, borderColor: C.line, width: '100%', maxWidth: 400, alignSelf: 'center' }}>
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: 'block', background: '#12100C' }}>
         {[1, 2, 3].map((i) => (
           <line key={`v${i}`} x1={(W / 4) * i} y1="0" x2={(W / 4) * i} y2={H} stroke="#2A241B" strokeWidth="1" />

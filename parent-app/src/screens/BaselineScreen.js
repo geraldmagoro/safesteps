@@ -21,7 +21,7 @@ function HrBars({ trips, defaultHr, proposed, active }) {
     </g>
   );
   return (
-    <View style={{ borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: C.line }}>
+    <View style={{ borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: C.line, width: '100%', maxWidth: 400, alignSelf: 'center' }}>
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: 'block', background: '#12100C' }}>
         {[100, 120, 140].map((v) => (
           <g key={v}>
