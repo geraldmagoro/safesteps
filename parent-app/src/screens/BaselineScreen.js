@@ -67,10 +67,11 @@ function Step({ n, title, children }) {
 export default function BaselineScreen() {
   const [b, setB] = useState(null);
   const [err, setErr] = useState('');
+  const [netErr, setNetErr] = useState('');
   const [run, setRun] = useState({ running: false, log: [] });
 
   const load = async () => {
-    try { setB(await baselineGet(CHILD)); setErr(''); } catch (e) { setErr('Backend not reachable.'); }
+    try { setB(await baselineGet(CHILD)); setNetErr(''); } catch (e) { setNetErr('Backend not reachable.'); }
   };
   useEffect(() => {
     load();
@@ -82,8 +83,16 @@ export default function BaselineScreen() {
   }, []);
 
   const act = (fn) => async () => {
-    try { setB(await fn(CHILD)); setErr(''); } catch (e) {
-      setErr(String(e.message || e).includes('400') ? 'Not ready: load the history, then analyse, then approve.' : 'Could not do that. Is the backend running?');
+    setErr('');
+    try { setB(await fn(CHILD)); } catch (e) {
+      const msg = String(e.message || e);
+      if (fn === baselineAnalyze && msg.includes('400') && b?.has_history) {
+        setErr('The Meta key is not set on the backend, so the analysis cannot run. Start the backend with META_API_KEY set.');
+      } else if (msg.includes('400')) {
+        setErr('Not ready: load the history, then analyse, then approve.');
+      } else {
+        setErr('Could not do that. Is the backend running?');
+      }
     }
   };
   const playRunner = async () => {
@@ -103,7 +112,7 @@ export default function BaselineScreen() {
           The Meta Model proposes, the server limits the proposal, and the parent approves. Band-off, drowning, faint and off-route rules never change.
         </T>
       </View>
-      {err ? <T style={{ color: C.amber }}>{err}</T> : null}
+      {netErr || err ? <T style={{ color: C.amber }}>{netErr || err}</T> : null}
 
       <Step n="1" title="Load her recent trips">
         <T style={{ color: C.mute, fontSize: 13 }}>The demo uses three weeks of SYNTHETIC trips. The method works on real trip logs, which the app does not collect yet.</T>

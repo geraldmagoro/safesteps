@@ -23,7 +23,7 @@ SafeSteps is a small body-worn band (ankle for a child, waist under clothing for
 | Phone as the band (real GPS, simulated heart rate and skin sensor) | Built |
 | Access PIN on every data endpoint | Built (single shared PIN) |
 | Personal baseline: Meta Model proposes, server limits, parent approves | Built (demo history is **synthetic**) |
-| Automated tests (rules, baseline, PIN, AI client) | Built (38 tests) |
+| Automated tests (rules, baseline, PIN, AI client) | Built (48 tests) |
 | Baseline learned from real trip logs | Roadmap, not built |
 | Band hardware, heart-rate and skin sensors | **Simulated** |
 | SMS fallback, ambulance (EMS) call | **Simulated** (written to a file or printed) |

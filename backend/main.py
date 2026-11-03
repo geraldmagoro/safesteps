@@ -301,6 +301,7 @@ def _mock_ems(route_id: str = "", destination: str = "") -> dict:
     near = f" near {destination}" if destination else ""
     return EMSCache(
         route_id=route_id,
+        # SAMPLE DATA for the demo: not verified numbers, never dialled by this app.
         nearest_saps="SAPS 10111 (Orlando SAPS, +27118761010)",
         clinic=f"Chiawelo Clinic{near} (+27111301001)",
         hospital="Chris Hani Baragwanath Hospital (+27119399111)",

@@ -166,7 +166,7 @@ class DemoRunner:
         alarmed = False
         for _ in range(16):
             lat, lon = self._pos
-            rd = self._reading(lat + random.uniform(-3e-6, 3e-6), lon + random.uniform(-3e-6, 3e-6), min(hr, 145))
+            rd = self._reading(lat + random.uniform(-3e-6, 3e-6), lon + random.uniform(-3e-6, 3e-6), min(hr, 155))
             hr += 4
             why = _edge_check(rd, self._prev)
             rd["edge_alarm"] = bool(why)
@@ -181,7 +181,7 @@ class DemoRunner:
         for rd in buffered:
             await self._push(rd, "buffered")
             await asyncio.sleep(0.05)
-        last = self._reading(self._pos[0], self._pos[1], 145, edge_alarm=True)
+        last = self._reading(self._pos[0], self._pos[1], 155, edge_alarm=True)  # above the 150 bpm personal-threshold cap: always alerts
         await self._push(last, "relay")
         await self.emit("link", "Buffer delivered. Meta Model triage is running in the background.")
 
