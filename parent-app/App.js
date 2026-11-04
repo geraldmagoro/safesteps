@@ -141,7 +141,6 @@ export default function App() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }}>
-      <View style={{ flex: 1, width: '100%', maxWidth: 760, alignSelf: 'center' }}>
       <View style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: C.line, gap: 10 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
           <Image source={require('./assets/logo.png')} style={{ width: 38, height: 38 }} resizeMode="contain" />
@@ -166,7 +165,6 @@ export default function App() {
         </View>
       ) : null}
       <View style={{ flex: 1 }}>{body}</View>
-      </View>
     </SafeAreaView>
   );
 }
